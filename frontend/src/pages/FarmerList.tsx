@@ -1,17 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, X, CloudUpload } from "lucide-react";
+import { Search, X, CloudUpload, Download, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { api } from "../api";
 import { useLang } from "../LangContext";
 import { tr, trDistrict, trTaluka, trVillage } from "../i18n";
 
+// CR-19: columns the Farmer Records table can be sorted by, matching the
+// backend's SORTABLE_FIELDS whitelist — keep these in sync with main.py.
+const SORT_COLUMNS: { key: string; label: string }[] = [
+  { key: "farmer_name", label: "Farmer" },
+  { key: "village", label: "Village" },
+  { key: "district", label: "District" },
+  { key: "areca_area_acres", label: "Areca Area" },
+  { key: "yield_raw_qtl", label: "Yield (Qtl)" },
+  { key: "total_income_inr", label: "Net Income" },
+];
+
 export default function FarmerList() {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { lang } = useLang();
   const justQueued = searchParams.get("queued") === "1";
+  const sortBy = searchParams.get("sort_by") || "entry_timestamp";
+  const sortDir = searchParams.get("sort_dir") === "asc" ? "asc" : "desc";
 
   const filterParams = useMemo(() => {
     const obj: Record<string, string> = {};
@@ -22,6 +37,38 @@ export default function FarmerList() {
   const load = () => {
     const params = { ...filterParams, ...(q ? { q } : {}) };
     api.listSurveys(Object.keys(params).length ? params : undefined).then(setRows).catch(console.error);
+  };
+
+  const toggleSort = (key: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (sortBy === key) {
+      next.set("sort_dir", sortDir === "asc" ? "desc" : "asc");
+    } else {
+      next.set("sort_by", key);
+      next.set("sort_dir", "asc");
+    }
+    setSearchParams(next);
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const params = { ...filterParams, ...(q ? { q } : {}) };
+      const blob = await api.exportSurveys(Object.keys(params).length ? params : undefined);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `farmer_surveys_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setExportError(e.message || "Export failed.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -40,7 +87,7 @@ export default function FarmerList() {
     setSearchParams(next);
   };
 
-  const activeFilters = Object.entries(filterParams);
+  const activeFilters = Object.entries(filterParams).filter(([k]) => k !== "sort_by" && k !== "sort_dir");
 
   return (
     <div className="flex flex-col gap-3">
@@ -70,6 +117,12 @@ export default function FarmerList() {
         </div>
       )}
 
+      {exportError && (
+        <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-xs rounded-lg px-3 py-2">
+          {exportError}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--gt-text-muted)]" />
@@ -82,18 +135,23 @@ export default function FarmerList() {
           />
         </div>
         <button className="gt-btn-secondary" onClick={load}>{tr("search", lang)}</button>
+        <button className="gt-btn-secondary flex items-center gap-1.5" onClick={handleExport} disabled={exporting}>
+          <Download size={15} /> {exporting ? "Exporting…" : "Download Excel"}
+        </button>
       </div>
 
       <div className="gt-card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-[var(--gt-text-muted)] border-b border-[var(--gt-border)]">
-              <th className="p-3">Farmer</th>
-              <th className="p-3">{tr("village", lang)} / {tr("taluka", lang)}</th>
-              <th className="p-3">{tr("district", lang)}</th>
-              <th className="p-3">Areca Area</th>
-              <th className="p-3">Yield (Qtl)</th>
-              <th className="p-3">Net Income (₹)</th>
+              {SORT_COLUMNS.map(({ key, label }) => (
+                <th key={key} className="p-3 cursor-pointer select-none hover:text-[var(--gt-purple-dark)]" onClick={() => toggleSort(key)}>
+                  <span className="inline-flex items-center gap-1">
+                    {key === "village" ? <>{tr("village", lang)} / {tr("taluka", lang)}</> : key === "district" ? tr("district", lang) : label}
+                    {sortBy === key ? (sortDir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} className="opacity-30" />}
+                  </span>
+                </th>
+              ))}
               <th className="p-3"></th>
             </tr>
           </thead>

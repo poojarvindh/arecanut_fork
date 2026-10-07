@@ -421,6 +421,52 @@ CONTAINS_FILTER_FIELDS = [
     "society_benefits", "cultivation_challenges", "irrigation_source", "mech_owned", "mech_rented",
 ]
 
+# CR-19: columns a user may sort the Farmer Records list / export by. A fixed
+# whitelist, not an arbitrary getattr(FarmerSurvey, sort_by) — sort_by is
+# client-controlled input, and an unchecked attribute lookup would let a
+# request probe for (or sort by) columns that were never meant to be exposed
+# this way, e.g. password-adjacent or internal bookkeeping fields.
+SORTABLE_FIELDS = {
+    "farmer_name": m.FarmerSurvey.farmer_name,
+    "village": m.FarmerSurvey.village,
+    "district": m.FarmerSurvey.district,
+    "survey_year": m.FarmerSurvey.survey_year,
+    "areca_area_acres": m.FarmerSurvey.areca_area_acres,
+    "yield_raw_qtl": m.FarmerSurvey.yield_raw_qtl,
+    "total_income_inr": m.FarmerSurvey.total_income_inr,
+    "entry_timestamp": m.FarmerSurvey.entry_timestamp,
+}
+
+
+def build_survey_query(
+    db: Session, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+    marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+    credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+    input_source, input_challenges, tech_adoption, society_benefits,
+    cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+    sort_by, sort_dir,
+):
+    """Shared by GET /api/surveys and GET /api/surveys/export (CR-19) so the
+    export always reflects exactly the filters/sort the list view is
+    currently showing, never a second, independently-maintained copy."""
+    query = db.query(m.FarmerSurvey)
+    if farmer_id:
+        query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
+    local_vars = locals()
+    for field in EXACT_FILTER_FIELDS:
+        value = local_vars.get(field)
+        if value:
+            query = query.filter(getattr(m.FarmerSurvey, field) == value)
+    for field in CONTAINS_FILTER_FIELDS:
+        value = local_vars.get(field)
+        if value:
+            query = query.filter(getattr(m.FarmerSurvey, field).like(f"%{value}%"))
+    if q:
+        like = f"%{q}%"
+        query = query.filter((m.FarmerSurvey.farmer_name.like(like)) | (m.FarmerSurvey.farmer_id.like(like)) | (m.FarmerSurvey.mobile_no.like(like)))
+    sort_col = SORTABLE_FIELDS.get(sort_by, m.FarmerSurvey.entry_timestamp)
+    return query.order_by(sort_col.asc() if sort_dir == "asc" else sort_col.desc())
+
 
 @app.get("/api/surveys", response_model=list[SurveyOut])
 def list_surveys(
@@ -449,29 +495,97 @@ def list_surveys(
     irrigation_source: Optional[str] = None,
     mech_owned: Optional[str] = None,
     mech_rented: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: m.User = Depends(require_permission("farmer_records")),
 ):
-    query = db.query(m.FarmerSurvey)
-    if farmer_id:
-        query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
-    local_vars = locals()
-    for field in EXACT_FILTER_FIELDS:
-        value = local_vars.get(field)
-        if value:
-            query = query.filter(getattr(m.FarmerSurvey, field) == value)
-    for field in CONTAINS_FILTER_FIELDS:
-        value = local_vars.get(field)
-        if value:
-            query = query.filter(getattr(m.FarmerSurvey, field).like(f"%{value}%"))
-    if q:
-        like = f"%{q}%"
-        query = query.filter((m.FarmerSurvey.farmer_name.like(like)) | (m.FarmerSurvey.farmer_id.like(like)) | (m.FarmerSurvey.mobile_no.like(like)))
+    query = build_survey_query(
+        db, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+        marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+        credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+        input_source, input_challenges, tech_adoption, society_benefits,
+        cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+        sort_by, sort_dir,
+    )
     # capped result size + offset — prevents a single request from pulling the
     # entire table (OWASP API4:2023 Unrestricted Resource Consumption)
-    return query.order_by(m.FarmerSurvey.entry_timestamp.desc()).offset(offset).limit(limit).all()
+    return query.offset(offset).limit(limit).all()
+
+
+@app.get("/api/surveys/export")
+def export_surveys(
+    request: Request,
+    q: Optional[str] = None,
+    farmer_id: Optional[str] = None,
+    district: Optional[str] = None,
+    taluka: Optional[str] = None,
+    village: Optional[str] = None,
+    society_assoc: Optional[str] = None,
+    sale_type: Optional[str] = None,
+    marketing_channel: Optional[str] = None,
+    sale_month: Optional[str] = None,
+    storage_source: Optional[str] = None,
+    logistics_provider: Optional[str] = None,
+    credit_linkage: Optional[str] = None,
+    credit_source: Optional[str] = None,
+    scheme_availed: Optional[str] = None,
+    scheme_name: Optional[str] = None,
+    soil_test_done: Optional[str] = None,
+    crop_insurance: Optional[str] = None,
+    input_source: Optional[str] = None,
+    input_challenges: Optional[str] = None,
+    tech_adoption: Optional[str] = None,
+    society_benefits: Optional[str] = None,
+    cultivation_challenges: Optional[str] = None,
+    irrigation_source: Optional[str] = None,
+    mech_owned: Optional[str] = None,
+    mech_rented: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("farmer_records")),
+):
+    """CR-19: exports exactly what the Farmer Records list is currently
+    filtered/sorted to, as a real .xlsx (not a CSV with an .xlsx extension)."""
+    query = build_survey_query(
+        db, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+        marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+        credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+        input_source, input_challenges, tech_adoption, society_benefits,
+        cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+        sort_by, sort_dir,
+    )
+    # A higher cap than the UI list's 500/1000 (exports are an explicit, one-off
+    # action rather than a page someone repeatedly reloads) but still capped —
+    # same OWASP API4:2023 reasoning as list_surveys above.
+    rows = query.limit(5000).all()
+
+    import io
+    from openpyxl import Workbook
+    from fastapi.responses import StreamingResponse
+
+    columns = [c.name for c in m.FarmerSurvey.__table__.columns]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Farmer Surveys"
+    ws.append(columns)
+    for r in rows:
+        ws.append([getattr(r, c) for c in columns])
+    for i, col in enumerate(columns, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = max(12, min(30, len(col) + 2))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    audit(db, request, "surveys_export", user=user, detail=f"{len(rows)} rows")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="farmer_surveys_{datetime.date.today().isoformat()}.xlsx"'},
+    )
 
 
 @app.get("/api/surveys/{survey_id}", response_model=SurveyOut)
