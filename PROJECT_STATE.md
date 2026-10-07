@@ -69,7 +69,7 @@ Both commands must be run from the **repo root** (`D:\CLAUD\arecanut-app`), not 
 
 ## 3. Current Status (update this section every session)
 
-**Last updated**: 2026-10-08 — CR-18 Farmer History view, on branch `fix/test-failures-oct2026` (committed, not merged/pushed/deployed — see Session Log). Full CR-01..CR-23 status is tracked in the `project-arecanut-cr-tracker` memory file, not duplicated here going forward. Prior entry below, still accurate for everything through the RBAC rebuild:
+**Last updated**: 2026-10-08 — CR-19 Excel export + sortable columns, on branch `fix/test-failures-oct2026` (committed, not merged/pushed/deployed — see Session Log). **All 19 actionable CRs from the test workbook are now done** (CR-21/22/23 remain blocked pending client requirements — see section 3's tracker reference). Full CR-01..CR-23 status is tracked in the `project-arecanut-cr-tracker` memory file, not duplicated here going forward. Prior entry below, still accurate for everything through the RBAC rebuild:
 
 **Previously**: 2026-09-27, night — role-based access control rebuild (2 roles, per-user module permissions, single-admin enforcement, audit logging, `API_ENDPOINTS.md`) plus a generic admin CRUD registry for all master data. **Committed (`c306a47`, `a55f4fe`), pushed to `origin/main`, and DEPLOYED TO PRODUCTION — both backend and frontend.** Verified live against production: `enumerator1`/`enumerator2` correctly auto-migrated from `role="enumerator"` to `role="field"` with default permissions backfilled, admin login unaffected, all 70+ existing survey records still readable (zero regressions), User Management and Master Data admin screens both confirmed working against real production data in-browser.
 
@@ -111,10 +111,11 @@ Both commands must be run from the **repo root** (`D:\CLAUD\arecanut-app`), not 
 
 **CR-17 (2026-10-07, same branch) — DONE, see Session Log**: multiple plot/land records per farmer, each with its own reported area and optional GPS-measured boundary, reported-vs-GPS reconciliation per plot, and an aggregate total across all plots. New `FarmerPlot` child table; legacy single-boundary columns kept in sync with plots[0] for backward compatibility.
 
-**CR-18 (2026-10-08, same branch) — DONE, see Session Log**: new `survey_year` field plus a Farmer History view (`/farmers/:id/history`) comparing area/yield/production/quality across a farmer's survey years. Full CR-01..CR-23 schedule and per-CR status tracked in the `project-arecanut-cr-tracker` memory file going forward — check there before starting the next CR rather than this section.
+**CR-18 (2026-10-08, same branch) — DONE, see Session Log**: new `survey_year` field plus a Farmer History view (`/farmers/:id/history`) comparing area/yield/production/quality across a farmer's survey years.
 
-**Not yet started — larger scope or needs a decision first**:
-- **CR-19**: downloadable Excel export with filter/sort — not started, likely bounded in scope (an endpoint that serves `FarmerSurvey` rows as an .xlsx, reusing whatever filters `GET /api/surveys` already accepts).
+**CR-19 (2026-10-08, same branch) — DONE, see Session Log**: downloadable Excel export + sortable columns on Farmer Records, both backed by a shared `build_survey_query()` helper so the export can never drift from what the list view shows. Full CR-01..CR-23 schedule and per-CR status tracked in the `project-arecanut-cr-tracker` memory file going forward — check there before starting the next CR rather than this section.
+
+**Not yet started — needs client input, not actionable by design**:
 - **CR-21 / CR-22 / CR-23**: these three explicitly state in their own Expected Result that they need detailed requirements "provided/validated by the concerned teams before implementation" — not actionable yet by design, not just by omission.
 
 ## 4. Explicit "skip for now" items (do NOT implement without new instruction)
@@ -132,6 +133,17 @@ These were explicitly deferred by the client in the v4 retest file — do not bu
 - **OBS-046/048**: Client noted "FS team may provide inputs on upper limits" / "Social & FS Team may provide inputs" for exact numeric caps — implemented with the specific numbers the client DID give in the "Expected Outcome" column (20% interest cap, ₹10 crore absolute cap, household income brackets), but these are provisional pending the named teams' sign-off.
 
 ## 6. Session Log
+
+### Session — 2026-10-08, later (CR-19 Excel export + sortable columns — branch `fix/test-failures-oct2026`, COMMITTED, NOT YET MERGED/PUSHED/DEPLOYED)
+Final CR in the user-approved rollout's actionable list (CR-21/22/23 remain blocked on client-supplied requirements, per their own wording).
+
+**CR-19 — downloadable Excel export with filter/sort (built and verified)**: refactored `list_surveys`' ~25-parameter filter-building body into a shared `build_survey_query()` helper, so a second endpoint could reuse the exact same filters without a second, independently-maintained copy that could silently drift out of sync with what the UI list is actually showing.
+- **Backend**: new `SORTABLE_FIELDS` whitelist (`farmer_name`, `village`, `district`, `survey_year`, `areca_area_acres`, `yield_raw_qtl`, `total_income_inr`, `entry_timestamp`) and `sort_by`/`sort_dir` query params on `GET /api/surveys` — deliberately a fixed dict lookup rather than an arbitrary `getattr(FarmerSurvey, sort_by)` on raw client input, since that would let a request probe for or sort by a column never meant to be exposed this way. New `GET /api/surveys/export` reuses `build_survey_query()` with the identical filter/sort params, caps at 5000 rows (higher than the UI list's 500/1000 cap since an export is a deliberate one-off action, not a page someone repeatedly reloads, but still capped per the same OWASP API4:2023 reasoning as the existing endpoint), and streams a real `.xlsx` (openpyxl, all `FarmerSurvey` columns) via `StreamingResponse` with a `Content-Disposition` attachment header. Had to place the route before `GET /api/surveys/{survey_id}` so FastAPI's path matching doesn't try to parse `"export"` as an integer `survey_id` first.
+- **Frontend**: `api.ts` gained `exportSurveys()` — can't go through the shared `req()` helper since it returns a JSON-decoding promise, but reuses the same bearer-token-plus-one-retry-on-401 pattern so an expired access token doesn't just fail the download silently. `FarmerList.tsx` gained a "Download Excel" button (builds a blob URL, triggers a synthetic `<a download>` click, revokes the URL afterward) and clickable, sortable column headers (arrow-up/down/unsorted icons) that write `sort_by`/`sort_dir` into the URL's search params — consistent with how every other filter on this page already round-trips through the URL.
+- **Verified in-browser**: clicked the Net Income column header and confirmed ascending order (₹97,865 → ₹1,00,170 → ₹1,12,648 → …) with the URL updating to `sort_by=total_income_inr&sort_dir=asc`; clicked again and confirmed it toggled to descending with the URL updating accordingly. Clicked the actual "Download Excel" button and confirmed via the backend's own request log and the browser's network log that it fired a successful `200` against `/api/surveys/export` with the current sort params attached; separately called the endpoint directly and confirmed a correctly-sized (42KB for 100 rows) `.xlsx` with the right `content-type` and `Content-Disposition` filename. `npx tsc --noEmit` and `python -c "import app.main"` both clean.
+- **Not done this round**: no column picker for the export (it always includes every `FarmerSurvey` column) and no UI control for the export's row cap (silently truncates at 5000 if ever exceeded) — neither was asked for by CR-19's own wording, which just asked for "downloading the recorded data" and basic filter/sort.
+
+**All CR work from this test-workbook round is now complete** except CR-21/22/23, which remain blocked pending requirements from the client's concerned teams per each row's own wording. The user asked to be notified once every confirmed CR is done, for testing.
 
 ### Session — 2026-10-08 (CR-18 Farmer History view — branch `fix/test-failures-oct2026`, COMMITTED, NOT YET MERGED/PUSHED/DEPLOYED)
 Continuation of the user-approved CR rollout (one-by-one with confirmation before each).
