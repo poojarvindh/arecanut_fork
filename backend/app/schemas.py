@@ -143,6 +143,35 @@ class FarmerLookup(BaseModel):
     district: Optional[str] = None
 
 
+class LatLngPoint(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class FarmerPlotIn(BaseModel):
+    """CR-17: one plot/land record. `points`/`area_acres`/`method` mirror the
+    legacy single-boundary shape — a plot is reported-area-only until a
+    boundary is actually walked/drawn/uploaded for it."""
+    label: str = Field("Plot 1", max_length=STR_MAX)
+    reported_area_acres: float = Field(..., ge=0, le=100000)
+    points: Optional[List[LatLngPoint]] = None
+    area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    method: Optional[str] = Field(None, pattern="^(draw|excel|gps)$")
+
+    @field_validator("points")
+    @classmethod
+    def points_form_a_polygon(cls, v):
+        if v is not None and len(v) < 3:
+            raise ValueError("a captured plot boundary needs at least 3 points")
+        return v
+
+
+class FarmerPlotOut(FarmerPlotIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    captured_at: Optional[datetime] = None
+
+
 class SurveyIn(BaseModel):
     # Optional at the API layer: a brand-new farmer's id is auto-generated
     # server-side once the whole survey validates (see create_survey in
@@ -154,6 +183,7 @@ class SurveyIn(BaseModel):
     gender: str = Field(..., max_length=20)
     age: int = Field(..., ge=18, le=80)
     guardian_name: Optional[str] = Field(None, max_length=STR_MAX)
+    survey_year: Optional[int] = Field(None, ge=1950, le=2100)  # CR-18
 
     society_assoc: str = Field(..., max_length=10)
     society_name: Optional[str] = Field(None, max_length=STR_MAX)
@@ -184,9 +214,11 @@ class SurveyIn(BaseModel):
 
     sale_type: str = Field(..., max_length=50)
     processing_cost_inr: Optional[float] = Field(None, ge=0, le=100_000_000)  # capped at INR 10 crore
+    grading_done: Optional[str] = Field(None, max_length=10)  # "Yes"/"No" — only asked for processed sales (CR-05)
+    grading_rows: Optional[str] = Field(None, max_length=TEXT_MAX)  # JSON array of grade/variety rows (CR-05)
     marketing_channel: str = Field(..., max_length=STR_MAX)
     marketing_channel_detail: Optional[str] = Field(None, max_length=STR_MAX)
-    rate_inr_per_kg: float = Field(..., ge=0, le=1_000_000)
+    rate_inr_per_kg: Optional[float] = Field(None, ge=0, le=1_000_000)  # not required when grading (CR-07)
     sale_month: str = Field(..., max_length=20)
 
     storage_duration_months: Optional[float] = Field(None, ge=0, le=1200)
@@ -243,7 +275,7 @@ class SurveyIn(BaseModel):
     credit_gap_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)  # capped at INR 10 crore (1000 lakh)
 
     scheme_availed: str = Field(..., max_length=10)
-    scheme_name: Optional[str] = Field(None, max_length=STR_MAX)
+    scheme_name: Optional[str] = Field(None, max_length=TEXT_MAX)  # CR-15: multi-select, comma-joined
     scheme_benefits: Optional[str] = Field(None, max_length=TEXT_MAX)
 
     irrigation_source: Optional[str] = Field(None, max_length=TEXT_MAX)
@@ -254,10 +286,10 @@ class SurveyIn(BaseModel):
     crop_insurance_detail: Optional[str] = Field(None, max_length=TEXT_MAX)
     natural_calamity_5yr: Optional[str] = Field(None, max_length=10)
 
-    input_source: str = Field(..., max_length=STR_MAX)
+    input_source: str = Field(..., max_length=TEXT_MAX)  # CR-14: multi-select, comma-joined
     input_source_other: Optional[str] = Field(None, max_length=STR_MAX)
     input_distance_km: Optional[float] = Field(None, ge=0, le=100000)
-    input_challenges: Optional[str] = Field(None, max_length=STR_MAX)
+    input_challenges: Optional[str] = Field(None, max_length=TEXT_MAX)  # CR-14: multi-select, comma-joined
     input_challenges_other: Optional[str] = Field(None, max_length=STR_MAX)
     input_purchase_delay_days: Optional[int] = Field(None, ge=0, le=3650)
 
@@ -277,6 +309,13 @@ class SurveyIn(BaseModel):
     plot_boundary: Optional[str] = Field(None, max_length=TEXT_MAX)
     plot_boundary_area_acres: Optional[float] = Field(None, ge=0, le=1_000_000)
     plot_boundary_method: Optional[str] = Field(None, max_length=20)
+
+    # CR-17: multiple plot/land records per farmer. When present (new/edited
+    # surveys from the updated wizard), this supersedes the single legacy
+    # plot_boundary field above for validation purposes — main.py still keeps
+    # plot_boundary/* in sync with plots[0] so older consumers (Plots Map,
+    # dashboard filters) keep working unchanged.
+    plots: Optional[List[FarmerPlotIn]] = None
 
     @field_validator("mobile_no")
     @classmethod
@@ -346,6 +385,26 @@ class SurveyIn(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def grading_rows_required_when_grading(self):
+        # CR-05/CR-07: grading is only offered for processed sales; when the farmer
+        # grades/sorts, per-row rates replace the single top-level Rate Realised field.
+        is_processed = self.sale_type in ("Sold processed areca", "Sold both raw and processed areca")
+        is_grading = is_processed and self.grading_done == "Yes"
+        if is_grading:
+            try:
+                rows = json.loads(self.grading_rows) if self.grading_rows else []
+            except (ValueError, TypeError):
+                raise ValueError("grading_rows must be a valid JSON array")
+            if not isinstance(rows, list) or len(rows) == 0:
+                raise ValueError("at least one grading row is required when grading_done = Yes")
+            for row in rows:
+                if not isinstance(row, dict) or not row.get("variety") or row.get("quantity_qtl") is None or row.get("rate_inr_per_kg") is None:
+                    raise ValueError("each grading row needs variety, quantity_qtl and rate_inr_per_kg")
+        elif self.rate_inr_per_kg is None:
+            raise ValueError("rate_inr_per_kg is required unless the farmer grades/sorts processed produce")
+        return self
+
+    @model_validator(mode="after")
     def areca_area_within_land(self):
         total_land = (self.land_own_acres or 0) + (self.land_leased_acres or 0)
         if self.areca_area_acres > total_land:
@@ -354,6 +413,17 @@ class SurveyIn(BaseModel):
 
     @model_validator(mode="after")
     def plot_boundary_required(self):
+        # CR-17: a survey using the new multi-plot flow (plots is not None)
+        # is validated by at-least-one-plot-has-a-boundary instead of the
+        # single legacy field — every plot still needs a reported area
+        # (enforced by FarmerPlotIn itself), but the boundary walk/draw/upload
+        # is only mandatory somewhere across the set, not on every plot.
+        if self.plots is not None:
+            if len(self.plots) == 0:
+                raise ValueError("at least one plot is required")
+            if not any(p.points and len(p.points) >= 3 for p in self.plots):
+                raise ValueError("at least one plot needs a captured boundary — capture at least 3 points via Draw on Map, Excel upload, or GPS walk")
+            return self
         try:
             points = json.loads(self.plot_boundary) if self.plot_boundary else []
         except (ValueError, TypeError):
@@ -373,6 +443,7 @@ class SurveyOut(SurveyIn):
     plot_boundary_area_acres: Optional[float] = None
     plot_boundary_method: Optional[str] = None
     plot_boundary_captured_at: Optional[datetime] = None
+    plots: List[FarmerPlotOut] = Field(default_factory=list)  # CR-17
 
     # These two rules are intentionally input-only (create/update): they enforce
     # requirements for new/edited data, but records saved before a requirement
@@ -386,6 +457,10 @@ class SurveyOut(SurveyIn):
 
     @model_validator(mode="after")
     def yield_matches_sale_type(self):
+        return self
+
+    @model_validator(mode="after")
+    def grading_rows_required_when_grading(self):
         return self
 
     # Same input-only reasoning as above: a content-shape rule (must contain

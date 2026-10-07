@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, PlusCircle, Users, Languages, WifiOff, RefreshCw, LogOut, UserCircle, Map, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, ClipboardList, PlusCircle, Users, Languages, WifiOff, RefreshCw, LogOut, UserCircle, Map, ShieldCheck, MoreHorizontal } from "lucide-react";
 import { useLang } from "./LangContext";
 import { tr } from "./i18n";
 import { useAuth } from "./AuthContext";
@@ -55,11 +55,22 @@ export default function Layout() {
   const { lang, toggle } = useLang();
   const { user, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   const doLogout = () => {
     logout();
     navigate("/login");
   };
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [moreOpen]);
 
   const isAdmin = user?.role === "admin";
   const desktopNav = [
@@ -71,10 +82,21 @@ export default function Layout() {
     { to: "/users", label: tr("navUsers", lang), icon: ShieldCheck, end: false, show: isAdmin },
   ].filter((item) => item.show);
 
-  const mobileNav = [
+  // The bottom tab bar only has room for a handful of icons, so it keeps the
+  // 3 items a field user touches constantly; anything else a mobile user is
+  // still entitled to (Plots Map, Master Data, Users — previously only ever
+  // rendered in the desktop top nav, so an admin or plots_map-only user had
+  // no way to reach them on a phone at all) goes in the "More" menu instead.
+  const mobilePrimary = [
     { to: "/", label: tr("navDashboard", lang), icon: LayoutDashboard, end: true, show: true },
     { to: "/entry", label: tr("navNewEntry", lang), icon: PlusCircle, end: false, show: hasPermission("survey_entry") || hasPermission("fpo_consultation") },
     { to: "/farmers", label: tr("navFarmers", lang), icon: Users, end: false, show: hasPermission("farmer_records") },
+  ].filter((item) => item.show);
+
+  const mobileMore = [
+    { to: "/plots", label: tr("navPlotsMap", lang), icon: Map, show: hasPermission("plots_map") },
+    { to: "/masters", label: tr("navMasterData", lang), icon: ClipboardList, show: isAdmin },
+    { to: "/users", label: tr("navUsers", lang), icon: ShieldCheck, show: isAdmin },
   ].filter((item) => item.show);
 
   return (
@@ -100,8 +122,8 @@ export default function Layout() {
                 <Languages size={14} /> {lang === "en" ? "ಕನ್ನಡ" : "English"}
               </button>
               {user && (
-                <div className="hidden md:flex items-center gap-1.5 bg-white/15 rounded-full pl-2.5 pr-1 py-1 text-xs font-medium">
-                  <UserCircle size={14} /> {user.full_name}
+                <div className="flex items-center gap-1.5 bg-white/15 rounded-full pl-2.5 pr-1 py-1 text-xs font-medium">
+                  <UserCircle size={14} /> <span className="hidden sm:inline">{user.full_name}</span>
                   <button type="button" onClick={doLogout} title="Log out" className="bg-white/20 hover:bg-white/30 rounded-full p-1 ml-1">
                     <LogOut size={12} />
                   </button>
@@ -135,12 +157,13 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-[var(--gt-border)] flex md:hidden z-20">
-        {mobileNav.map(({ to, label, icon: Icon, end }) => (
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-[var(--gt-border)] flex md:hidden z-20" ref={moreRef}>
+        {mobilePrimary.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
+            onClick={() => setMoreOpen(false)}
             className={({ isActive }) =>
               `flex-1 flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${
                 isActive ? "text-[var(--gt-purple)]" : "text-[var(--gt-text-muted)]"
@@ -151,6 +174,45 @@ export default function Layout() {
             {label}
           </NavLink>
         ))}
+        {mobileMore.length > 0 && (
+          <div className="flex-1 relative">
+            <button
+              type="button"
+              onClick={() => setMoreOpen((o) => !o)}
+              className={`w-full flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${
+                moreOpen ? "text-[var(--gt-purple)]" : "text-[var(--gt-text-muted)]"
+              }`}
+            >
+              <MoreHorizontal size={20} />
+              More
+            </button>
+            {moreOpen && (
+              <div className="absolute bottom-full right-0 mb-1 bg-white border border-[var(--gt-border)] rounded-xl shadow-lg overflow-hidden min-w-[180px]">
+                {mobileMore.map(({ to, label, icon: Icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    onClick={() => setMoreOpen(false)}
+                    className={({ isActive }) =>
+                      `flex items-center gap-2 px-4 py-3 text-sm font-medium border-b border-[var(--gt-border)] last:border-none ${
+                        isActive ? "text-[var(--gt-purple)] bg-[#F1EBF7]" : "text-[var(--gt-text-muted)]"
+                      }`
+                    }
+                  >
+                    <Icon size={16} /> {label}
+                  </NavLink>
+                ))}
+                <button
+                  type="button"
+                  onClick={doLogout}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium text-[var(--gt-danger)]"
+                >
+                  <LogOut size={16} /> Log out
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </nav>
     </div>
   );

@@ -111,6 +111,23 @@ export const api = {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return req(`/surveys${qs}`);
   },
+  // CR-19: downloadable Excel export of the Farmer Records list, honoring
+  // whatever filters/sort are currently applied. Returns a Blob (not JSON),
+  // so it can't go through req() — but reuses the same bearer-token +
+  // one-retry-on-401 pattern so an expired access token doesn't just fail silently.
+  exportSurveys: async (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    let res = await rawFetch(`/surveys/export${qs}`, undefined, getToken());
+    if (res.status === 401) {
+      const refreshed = await tryRefresh();
+      if (refreshed) res = await rawFetch(`/surveys/export${qs}`, undefined, getToken());
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Export failed: ${res.status}`);
+    }
+    return res.blob();
+  },
   getSurvey: (id: number) => req(`/surveys/${id}`),
   createSurvey: (data: any) => req("/surveys", { method: "POST", body: JSON.stringify(data) }),
   updateSurvey: (id: number, data: any) => req(`/surveys/${id}`, { method: "PUT", body: JSON.stringify(data) }),

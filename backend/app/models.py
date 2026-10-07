@@ -164,6 +164,14 @@ class FarmerSurvey(Base):
     age = Column(Integer, nullable=False)
     guardian_name = Column(String, nullable=True)
 
+    # CR-18: the agricultural year/season this survey reports on — distinct
+    # from entry_timestamp (when it was typed into the system). A farmer
+    # already gets a new row per survey (no uniqueness constraint on
+    # farmer_id — see the Session Log), so this is what the Farmer History
+    # view groups/sorts by, letting someone backfill or correct a past
+    # season's entry without it being mistaken for "this year".
+    survey_year = Column(Integer, nullable=True, index=True)
+
     # Module 1: Society / FPC Linkage
     society_assoc = Column(String, nullable=False)          # Yes/No
     society_name = Column(String, nullable=True)
@@ -198,9 +206,11 @@ class FarmerSurvey(Base):
     # Module 5: Sales, Marketing & Income
     sale_type = Column(String, nullable=False)
     processing_cost_inr = Column(Float, nullable=True)
+    grading_done = Column(String, nullable=True)  # "Yes"/"No" — only asked when sale_type includes processed (CR-05)
+    grading_rows = Column(Text, nullable=True)  # JSON array of {variety, variety_other, quantity_qtl, rate_inr_per_kg} (CR-05)
     marketing_channel = Column(String, nullable=False)
     marketing_channel_detail = Column(String, nullable=True)  # name, if Cooperative Society / APMC
-    rate_inr_per_kg = Column(Float, nullable=False)
+    rate_inr_per_kg = Column(Float, nullable=True)  # not required when grading (CR-07) — required check moved to app validation
     total_income_inr = Column(Float, nullable=False)        # auto-calculated
     sale_month = Column(String, nullable=False)
 
@@ -310,10 +320,53 @@ class FarmerSurvey(Base):
     # [{"lat":..,"lng":..}, ...] — captured via draw-on-map, Excel upload, or
     # GPS walk. Kept as one JSON blob rather than a child table since it's
     # always read/written whole, never queried by vertex.
+    # Legacy "primary plot" fields — kept for backward compatibility with
+    # records created before CR-17 (multi-plot). Always mirrors plots[0] for
+    # any survey saved through the multi-plot flow, so every existing consumer
+    # of these four columns (Plots Map, dashboard filters, PlotSummaryOut)
+    # keeps working unchanged.
     plot_boundary = Column(Text, nullable=True)
     plot_boundary_area_acres = Column(Float, nullable=True)
     plot_boundary_method = Column(String, nullable=True)  # "draw" | "excel" | "gps"
     plot_boundary_captured_at = Column(DateTime, nullable=True)
+
+    plots = relationship("FarmerPlot", back_populates="survey", cascade="all, delete-orphan", order_by="FarmerPlot.sort_order")
+
+
+class FarmerPlot(Base):
+    """
+    CR-17: a farmer may hold multiple plots/land parcels, possibly in
+    different locations, each with its own farmer-reported area and its own
+    optional GPS-measured boundary (captured via the same draw/Excel/GPS tabs
+    as the legacy single-plot flow). reported_area_acres vs area_acres is the
+    "reported vs GPS-measured" reconciliation CR-17 asks for; the aggregate
+    total across a survey's plots is computed by the caller (frontend review
+    screen avoids a wasted query — DataEntryWizard already loads the full
+    list when editing, so it sums client-side instead of a dedicated endpoint).
+    """
+    __tablename__ = "farmer_plot"
+    id = Column(Integer, primary_key=True)
+    survey_id = Column(Integer, ForeignKey("farmer_survey.id"), nullable=False, index=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    label = Column(String, nullable=False, default="Plot 1")
+    reported_area_acres = Column(Float, nullable=False)
+    boundary = Column(Text, nullable=True)       # JSON array of {lat, lng}, same shape as legacy plot_boundary
+    area_acres = Column(Float, nullable=True)    # GPS-measured area for this plot, if a boundary was captured
+    method = Column(String, nullable=True)        # "draw" | "excel" | "gps"
+    captured_at = Column(DateTime, nullable=True)
+
+    survey = relationship("FarmerSurvey", back_populates="plots")
+
+    @property
+    def points(self):
+        """Exposes `boundary` (stored as a JSON string) as a parsed list, under
+        the name FarmerPlotOut expects — pydantic's from_attributes reads
+        whatever attribute matches the schema field name, and the DB column
+        is named `boundary` (matching the legacy plot_boundary naming), not
+        `points`, so without this property every API read would silently
+        drop the captured boundary back to null."""
+        import json
+        return json.loads(self.boundary) if self.boundary else None
 
 
 # ---------------- FPO CONSULTATION MODULE (72-question screening questionnaire) ----------------

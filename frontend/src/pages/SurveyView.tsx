@@ -3,11 +3,12 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Pencil, ArrowLeft, UserSearch, Handshake, MapPin, LandPlot, Wheat,
   Coins, Warehouse, TriangleAlert, Sprout, Wrench, Truck, Smartphone, CreditCard,
-  Landmark, Droplets, FlaskConical, ScanLine, Map,
+  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2, History,
 } from "lucide-react";
 import { api } from "../api";
 import { useLang } from "../LangContext";
 import { trDistrict, trTaluka, trVillage } from "../i18n";
+import { useAuth } from "../AuthContext";
 
 const HOUSEHOLD_INCOME_BRACKET_LABELS: Record<string, string> = {
   "<10000": "Less than ₹10,000",
@@ -44,12 +45,27 @@ export default function SurveyView() {
   const justSaved = params.get("justSaved") === "1";
   const navigate = useNavigate();
   const { lang } = useLang();
+  const { user } = useAuth();
   const [s, setS] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     api.getSurvey(Number(id)).then(setS).catch((e) => setError(e.message));
   }, [id]);
+
+  const handleDelete = async () => {
+    if (!s) return;
+    if (!confirm(`Delete the record for ${s.farmer_name} (${s.farmer_id})? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteSurvey(s.id);
+      navigate("/farmers");
+    } catch (e: any) {
+      setError(e.message);
+      setDeleting(false);
+    }
+  };
 
   if (error) return <div className="text-center py-20 text-[var(--gt-danger)]">{error}</div>;
   if (!s) return <div className="text-center py-20 text-[var(--gt-text-muted)]">Loading survey…</div>;
@@ -74,9 +90,21 @@ export default function SurveyView() {
           <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/plot-boundary`)}>
             <Map size={15} /> Plot Boundary
           </button>
-          <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry?id=${s.id}`)}>
+          <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/history`)}>
+            <History size={15} /> History
+          </button>
+          <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry/farmer?id=${s.id}`)}>
             <Pencil size={15} /> Edit
           </button>
+          {user?.role === "admin" && (
+            <button
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-[var(--gt-danger)]/40 text-[var(--gt-danger)] hover:bg-red-50 disabled:opacity-60"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              <Trash2 size={15} /> {deleting ? "Deleting…" : "Delete"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -95,6 +123,25 @@ export default function SurveyView() {
         </div>
       </div>
 
+      {Array.isArray(s.plots) && s.plots.length > 0 && (
+        <div className="gt-card p-4">
+          <div className="font-semibold text-sm mb-2 text-[var(--gt-purple-dark)]">Plot / Land Records ({s.plots.length})</div>
+          <div className="space-y-2">
+            {s.plots.map((p: any, i: number) => (
+              <div key={i} className="flex items-center justify-between text-sm border-b border-[var(--gt-border)] last:border-0 py-1.5">
+                <span className="font-medium">{p.label || `Plot ${i + 1}`}</span>
+                <span className="text-[var(--gt-text-muted)]">Reported: <b>{p.reported_area_acres} acres</b></span>
+                <span className="text-[var(--gt-purple-dark)]">GPS-Measured: <b>{p.area_acres != null ? `${p.area_acres} acres` : "Not captured"}</b></span>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-6 text-sm mt-2 pt-2 border-t border-[var(--gt-border)]">
+            <span>Total Reported: <b>{s.plots.reduce((sum: number, p: any) => sum + (p.reported_area_acres || 0), 0).toFixed(2)} acres</b></span>
+            <span>Total GPS-Measured: <b>{s.plots.reduce((sum: number, p: any) => sum + (p.area_acres || 0), 0).toFixed(2)} acres</b></span>
+          </div>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-4">
         <Section icon={UserSearch} title="Farmer Link">
           <Row label="Farmer Name" value={s.farmer_name} />
@@ -103,6 +150,7 @@ export default function SurveyView() {
           <Row label="Age" value={s.age} />
           <Row label="Father / Husband Name" value={s.guardian_name} />
           <Row label="Farmer Unique ID" value={s.farmer_id} />
+          <Row label="Survey Year / Season" value={s.survey_year} />
         </Section>
 
         <Section icon={Handshake} title="Society / FPC Linkage">
@@ -206,9 +254,9 @@ export default function SurveyView() {
         </Section>
 
         <Section icon={Truck} title="Input Supply Chain">
-          <Row label="Source" value={s.input_source} />
+          <Row label="Source" value={s.input_source?.split(",").join(", ")} />
           <Row label="Distance (Km)" value={s.input_distance_km} />
-          <Row label="Challenges" value={s.input_challenges} />
+          <Row label="Challenges" value={s.input_challenges?.split(",").join(", ")} />
           {s.input_purchase_delay_days != null && <Row label="Average Delay (Days)" value={s.input_purchase_delay_days} />}
         </Section>
 
@@ -257,7 +305,7 @@ export default function SurveyView() {
           <Row label="Availed" value={s.scheme_availed} />
           {s.scheme_availed === "Yes" && (
             <>
-              <Row label="Scheme Name" value={s.scheme_name} />
+              <Row label="Scheme Name" value={s.scheme_name?.split(",").join(", ")} />
               <Row label="Benefits" value={s.scheme_benefits} />
             </>
           )}

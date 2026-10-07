@@ -1,4 +1,5 @@
 import re
+import json
 from collections import Counter
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
@@ -377,10 +378,22 @@ def get_options(list_code: str = Query(...), db: Session = Depends(get_db)):
 # ---------------- FARMER MASTER LOOKUP (Module 0: search by Aadhaar/Mobile) ----------------
 
 @app.get("/api/farmer-master/lookup", response_model=Optional[FarmerLookup])
-def lookup_farmer(q: str = Query(..., description="Aadhaar or Mobile number"), db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+def lookup_farmer(q: str = Query(..., description="Aadhaar, Mobile number, or Farmer ID"), db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+    q = q.strip()
+    # Mobile/Aadhaar stay exact-match — they're sensitive identifiers, and partial
+    # matching on them would be both a privacy smell and ambiguous (many farmers
+    # could share a partial digit sequence). Farmer ID is different: it's not
+    # sensitive, and was found to only match when typed with the exact case and
+    # full "NCCF/KA/0007" format — a user typing "0007" or "ncaf/ka/0007" got no
+    # result even though the farmer exists. Farmer ID now matches case-insensitively
+    # and on a partial/contains basis, same as how this ID appears in the UI elsewhere.
     fm = (
         db.query(m.FarmerMaster)
-        .filter((m.FarmerMaster.mobile_no == q) | (m.FarmerMaster.aadhaar_no == q) | (m.FarmerMaster.farmer_id == q))
+        .filter(
+            (m.FarmerMaster.mobile_no == q)
+            | (m.FarmerMaster.aadhaar_no == q)
+            | (func.lower(m.FarmerMaster.farmer_id).contains(q.lower()))
+        )
         .first()
     )
     if not fm:
@@ -408,10 +421,57 @@ CONTAINS_FILTER_FIELDS = [
     "society_benefits", "cultivation_challenges", "irrigation_source", "mech_owned", "mech_rented",
 ]
 
+# CR-19: columns a user may sort the Farmer Records list / export by. A fixed
+# whitelist, not an arbitrary getattr(FarmerSurvey, sort_by) — sort_by is
+# client-controlled input, and an unchecked attribute lookup would let a
+# request probe for (or sort by) columns that were never meant to be exposed
+# this way, e.g. password-adjacent or internal bookkeeping fields.
+SORTABLE_FIELDS = {
+    "farmer_name": m.FarmerSurvey.farmer_name,
+    "village": m.FarmerSurvey.village,
+    "district": m.FarmerSurvey.district,
+    "survey_year": m.FarmerSurvey.survey_year,
+    "areca_area_acres": m.FarmerSurvey.areca_area_acres,
+    "yield_raw_qtl": m.FarmerSurvey.yield_raw_qtl,
+    "total_income_inr": m.FarmerSurvey.total_income_inr,
+    "entry_timestamp": m.FarmerSurvey.entry_timestamp,
+}
+
+
+def build_survey_query(
+    db: Session, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+    marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+    credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+    input_source, input_challenges, tech_adoption, society_benefits,
+    cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+    sort_by, sort_dir,
+):
+    """Shared by GET /api/surveys and GET /api/surveys/export (CR-19) so the
+    export always reflects exactly the filters/sort the list view is
+    currently showing, never a second, independently-maintained copy."""
+    query = db.query(m.FarmerSurvey)
+    if farmer_id:
+        query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
+    local_vars = locals()
+    for field in EXACT_FILTER_FIELDS:
+        value = local_vars.get(field)
+        if value:
+            query = query.filter(getattr(m.FarmerSurvey, field) == value)
+    for field in CONTAINS_FILTER_FIELDS:
+        value = local_vars.get(field)
+        if value:
+            query = query.filter(getattr(m.FarmerSurvey, field).like(f"%{value}%"))
+    if q:
+        like = f"%{q}%"
+        query = query.filter((m.FarmerSurvey.farmer_name.like(like)) | (m.FarmerSurvey.farmer_id.like(like)) | (m.FarmerSurvey.mobile_no.like(like)))
+    sort_col = SORTABLE_FIELDS.get(sort_by, m.FarmerSurvey.entry_timestamp)
+    return query.order_by(sort_col.asc() if sort_dir == "asc" else sort_col.desc())
+
 
 @app.get("/api/surveys", response_model=list[SurveyOut])
 def list_surveys(
     q: Optional[str] = None,
+    farmer_id: Optional[str] = None,
     district: Optional[str] = None,
     taluka: Optional[str] = None,
     village: Optional[str] = None,
@@ -435,27 +495,97 @@ def list_surveys(
     irrigation_source: Optional[str] = None,
     mech_owned: Optional[str] = None,
     mech_rented: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: m.User = Depends(require_permission("farmer_records")),
 ):
-    query = db.query(m.FarmerSurvey)
-    local_vars = locals()
-    for field in EXACT_FILTER_FIELDS:
-        value = local_vars.get(field)
-        if value:
-            query = query.filter(getattr(m.FarmerSurvey, field) == value)
-    for field in CONTAINS_FILTER_FIELDS:
-        value = local_vars.get(field)
-        if value:
-            query = query.filter(getattr(m.FarmerSurvey, field).like(f"%{value}%"))
-    if q:
-        like = f"%{q}%"
-        query = query.filter((m.FarmerSurvey.farmer_name.like(like)) | (m.FarmerSurvey.farmer_id.like(like)) | (m.FarmerSurvey.mobile_no.like(like)))
+    query = build_survey_query(
+        db, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+        marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+        credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+        input_source, input_challenges, tech_adoption, society_benefits,
+        cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+        sort_by, sort_dir,
+    )
     # capped result size + offset — prevents a single request from pulling the
     # entire table (OWASP API4:2023 Unrestricted Resource Consumption)
-    return query.order_by(m.FarmerSurvey.entry_timestamp.desc()).offset(offset).limit(limit).all()
+    return query.offset(offset).limit(limit).all()
+
+
+@app.get("/api/surveys/export")
+def export_surveys(
+    request: Request,
+    q: Optional[str] = None,
+    farmer_id: Optional[str] = None,
+    district: Optional[str] = None,
+    taluka: Optional[str] = None,
+    village: Optional[str] = None,
+    society_assoc: Optional[str] = None,
+    sale_type: Optional[str] = None,
+    marketing_channel: Optional[str] = None,
+    sale_month: Optional[str] = None,
+    storage_source: Optional[str] = None,
+    logistics_provider: Optional[str] = None,
+    credit_linkage: Optional[str] = None,
+    credit_source: Optional[str] = None,
+    scheme_availed: Optional[str] = None,
+    scheme_name: Optional[str] = None,
+    soil_test_done: Optional[str] = None,
+    crop_insurance: Optional[str] = None,
+    input_source: Optional[str] = None,
+    input_challenges: Optional[str] = None,
+    tech_adoption: Optional[str] = None,
+    society_benefits: Optional[str] = None,
+    cultivation_challenges: Optional[str] = None,
+    irrigation_source: Optional[str] = None,
+    mech_owned: Optional[str] = None,
+    mech_rented: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("farmer_records")),
+):
+    """CR-19: exports exactly what the Farmer Records list is currently
+    filtered/sorted to, as a real .xlsx (not a CSV with an .xlsx extension)."""
+    query = build_survey_query(
+        db, q, farmer_id, district, taluka, village, society_assoc, sale_type,
+        marketing_channel, sale_month, storage_source, logistics_provider, credit_linkage,
+        credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
+        input_source, input_challenges, tech_adoption, society_benefits,
+        cultivation_challenges, irrigation_source, mech_owned, mech_rented,
+        sort_by, sort_dir,
+    )
+    # A higher cap than the UI list's 500/1000 (exports are an explicit, one-off
+    # action rather than a page someone repeatedly reloads) but still capped —
+    # same OWASP API4:2023 reasoning as list_surveys above.
+    rows = query.limit(5000).all()
+
+    import io
+    from openpyxl import Workbook
+    from fastapi.responses import StreamingResponse
+
+    columns = [c.name for c in m.FarmerSurvey.__table__.columns]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Farmer Surveys"
+    ws.append(columns)
+    for r in rows:
+        ws.append([getattr(r, c) for c in columns])
+    for i, col in enumerate(columns, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = max(12, min(30, len(col) + 2))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    audit(db, request, "surveys_export", user=user, detail=f"{len(rows)} rows")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="farmer_surveys_{datetime.date.today().isoformat()}.xlsx"'},
+    )
 
 
 @app.get("/api/surveys/{survey_id}", response_model=SurveyOut)
@@ -469,8 +599,17 @@ def get_survey(survey_id: int, db: Session = Depends(get_db), user: m.User = Dep
 def compute_income(payload: SurveyIn) -> float:
     includes_raw = payload.sale_type in ("Sold raw areca", "Sold both raw and processed areca")
     includes_processed = payload.sale_type in ("Sold processed areca", "Sold both raw and processed areca")
-    yield_qtl = (payload.yield_raw_qtl or 0 if includes_raw else 0) + (payload.yield_processed_qtl or 0 if includes_processed else 0)
-    gross = yield_qtl * payload.rate_inr_per_kg * 100
+    is_grading = includes_processed and payload.grading_done == "Yes"
+    gross = 0.0
+    if is_grading:
+        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket rate.
+        rows = json.loads(payload.grading_rows) if payload.grading_rows else []
+        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) * 100 for r in rows)
+        if includes_raw:
+            gross += (payload.yield_raw_qtl or 0) * (payload.rate_inr_per_kg or 0) * 100
+    else:
+        yield_qtl = (payload.yield_raw_qtl or 0 if includes_raw else 0) + (payload.yield_processed_qtl or 0 if includes_processed else 0)
+        gross = yield_qtl * (payload.rate_inr_per_kg or 0) * 100
     total = gross - payload.cultivation_cost_inr
     if includes_processed and payload.processing_cost_inr:
         total -= payload.processing_cost_inr
@@ -500,6 +639,39 @@ def generate_farmer_id(db: Session) -> str:
     return f"NCCF/KA/{max_n + 1:04d}"
 
 
+def sync_plots(db: Session, survey: m.FarmerSurvey, plots_in):
+    """CR-17: replace a survey's FarmerPlot rows wholesale from the submitted
+    list, and mirror plots[0] into the legacy single-boundary columns so
+    older consumers (Plots Map, dashboard filters) keep working unchanged.
+    No-op when the request didn't send `plots` at all (old-style clients)."""
+    if plots_in is None:
+        return
+    survey.plots.clear()  # cascade="all, delete-orphan" removes the old rows on commit
+    now = datetime.datetime.utcnow()
+    for i, p in enumerate(plots_in):
+        points_json = json.dumps([pt.model_dump() for pt in p.points]) if p.points else None
+        survey.plots.append(m.FarmerPlot(
+            sort_order=i,
+            label=p.label,
+            reported_area_acres=p.reported_area_acres,
+            boundary=points_json,
+            area_acres=p.area_acres,
+            method=p.method,
+            captured_at=now if points_json else None,
+        ))
+    first = plots_in[0] if plots_in else None
+    if first and first.points:
+        survey.plot_boundary = json.dumps([pt.model_dump() for pt in first.points])
+        survey.plot_boundary_area_acres = first.area_acres
+        survey.plot_boundary_method = first.method
+        survey.plot_boundary_captured_at = now
+    else:
+        survey.plot_boundary = None
+        survey.plot_boundary_area_acres = None
+        survey.plot_boundary_method = None
+        survey.plot_boundary_captured_at = None
+
+
 @app.post("/api/surveys", response_model=SurveyOut)
 def create_survey(
     request: Request,
@@ -515,15 +687,20 @@ def create_survey(
             return existing
 
     data = payload.dict()
+    plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
     data["total_income_inr"] = compute_income(payload)
     data["entry_timestamp"] = datetime.datetime.utcnow()
     data["created_by_user_id"] = user.id
     if not data.get("farmer_id"):
         data["farmer_id"] = generate_farmer_id(db)
+    if not data.get("survey_year"):
+        data["survey_year"] = datetime.datetime.utcnow().year  # CR-18 — default to the year it was actually entered
     if data.get("plot_boundary"):
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     survey = m.FarmerSurvey(**data)
     db.add(survey)
+    db.flush()  # assigns survey.id so FarmerPlot rows can reference it
+    sync_plots(db, survey, payload.plots)
     db.commit()
     db.refresh(survey)
     audit(db, request, "survey_create", user=user, resource=f"survey:{survey.id}")
@@ -542,6 +719,7 @@ def update_survey(
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found")
     data = payload.dict()
+    plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
     data["total_income_inr"] = compute_income(payload)
     if not data.get("farmer_id"):
         data["farmer_id"] = survey.farmer_id  # never overwrite an assigned id with blank
@@ -549,6 +727,7 @@ def update_survey(
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     for k, v in data.items():
         setattr(survey, k, v)
+    sync_plots(db, survey, payload.plots)
     db.commit()
     db.refresh(survey)
     audit(db, request, "survey_update", user=user, resource=f"survey:{survey.id}")

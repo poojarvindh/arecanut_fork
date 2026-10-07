@@ -34,7 +34,16 @@ class Settings(BaseSettings):
     # a raw IP), but a real deployment MUST set this to its actual hostname(s).
     ALLOWED_HOSTS: str = "*"
 
-    RATE_LIMIT_LOGIN: str = "5/minute"
+    # Must stay comfortably above MAX_FAILED_LOGINS (auth.py, currently 5) — this
+    # is a per-IP brute-force guard, not the account lockout. When it was equal
+    # to MAX_FAILED_LOGINS, a single account's 5 legitimate wrong-password
+    # attempts would hit this IP-wide limit at nearly the same request count,
+    # so the user saw a generic "Rate limit exceeded" 429 instead of the
+    # intended, clearer "Account temporarily locked" 423 — and since several
+    # field users can share one office/LAN IP, it could also block a different
+    # user's unrelated login attempts. Set high enough that the account-level
+    # lockout is always what actually fires first for a single stuck user.
+    RATE_LIMIT_LOGIN: str = "15/minute"
     RATE_LIMIT_DEFAULT: str = "120/minute"
 
     # ---- Password reset / outbound email ----

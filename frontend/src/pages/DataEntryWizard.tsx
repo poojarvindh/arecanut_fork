@@ -25,6 +25,7 @@ const PLOT_METHODS: { key: CaptureMethod; label: string; icon: any }[] = [
 ];
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const GRADE_VARIETIES = ["Rashi", "Api", "Bette", "Saraku", "Other"]; // CR-05
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 1950 + 1 }, (_, i) => CURRENT_YEAR - i);
 
@@ -44,6 +45,7 @@ const STEPS = [
 
 const empty: any = {
   farmer_id: "", farmer_name: "", mobile_no: "", mobile_verified: false, gender: "Male", age: "", guardian_name: "",
+  survey_year: String(CURRENT_YEAR), // CR-18
   society_assoc: "No", society_name: "", society_since_year: "", society_benefits: [],
   village: "", taluka: "", district: "",
   land_own_acres: "", land_leased_acres: "", areca_area_acres: "", areca_plant_count: "",
@@ -51,6 +53,7 @@ const empty: any = {
   intercropping: "No", intercrop_crops: [], intercrop_crops_other: "", intercrop_area_acres: "",
   cultivation_cost_inr: "", yield_raw_qtl: "", yield_processed_qtl: "",
   sale_type: "Sold raw areca", processing_cost_inr: "", marketing_channel: "FPC/FPO", marketing_channel_detail: "",
+  grading_done: "No", grading_rows: [], // CR-05/CR-07
   rate_inr_per_kg: "", sale_month: "Jan",
   storage_duration_months: "", storage_source: "",
   storage_loan_availed: "No", storage_loan_amount_inr: "", storage_loan_interest_pct: "", storage_loan_repayment_months: "", storage_warehouse_receipt: "No",
@@ -64,10 +67,10 @@ const empty: any = {
   bank_account: "No", overdraft_facility: "No", overdraft_limit_inr_lakh: "",
   credit_linkage: "No", credit_source: "", credit_source_other: "", credit_amount_inr: "", credit_interest_rate_pct: "", credit_repayment_months: "",
   credit_outstanding_inr_lakh: "", loan_application_outcome: "", loan_rejection_reason: "", loan_rejection_reason_other: "", credit_gap_inr_lakh: "",
-  scheme_availed: "No", scheme_name: "", scheme_benefits: "",
+  scheme_availed: "No", scheme_name: [], scheme_benefits: "",
   irrigation_source: [], irrigation_challenges: "",
   soil_test_done: "No", crop_insurance: "No", crop_insurance_detail: "", natural_calamity_5yr: "No",
-  input_source: "Cooperative Society", input_source_other: "", input_distance_km: "", input_challenges: "", input_challenges_other: "", input_purchase_delay_days: "",
+  input_source: ["Cooperative Society"], input_source_other: "", input_distance_km: "", input_challenges: [], input_challenges_other: "", input_purchase_delay_days: "",
   tech_adoption: "No", tech_adoption_detail: "",
   kcc_account: "No", kcc_limit_inr_lakh: "",
   geo_lat: "", geo_long: "", field_photo: "",
@@ -101,6 +104,15 @@ function isBlank(v: any) {
 function hasMoreThanTwoDecimals(v: any) {
   const n = Number(v);
   return !isNaN(n) && Math.round(n * 100) !== n * 100;
+}
+
+// Generalized version of the above — CR-10 needed a 1-decimal-place limit
+// (Distance of Input Source) alongside the existing 2-decimal-place fields,
+// so this replaces hardcoding 100 everywhere a new precision is needed.
+function hasMoreThanNDecimals(v: any, n: number) {
+  const num = Number(v);
+  const factor = Math.pow(10, n);
+  return !isNaN(num) && Math.round(num * factor) !== num * factor;
 }
 
 function isWholeNumber(v: any) {
@@ -159,20 +171,45 @@ function getErrors(form: any): Record<string, string> {
     else if (Number(form.yield_raw_qtl) <= 0) e.yield_raw_qtl = "Must be a positive value.";
     else if (hasMoreThanTwoDecimals(form.yield_raw_qtl)) e.yield_raw_qtl = "Maximum 2 decimal places.";
   }
-  if (form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") {
+  const includesProcessedSale = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+  const isGrading = includesProcessedSale && form.grading_done === "Yes"; // CR-05/CR-07
+  if (includesProcessedSale) {
     if (isBlank(form.processing_cost_inr)) e.processing_cost_inr = "Processing cost is required for a processed sale.";
+    else if (hasMoreThanTwoDecimals(form.processing_cost_inr)) e.processing_cost_inr = "Maximum 2 decimal places."; // CR-06
     if (isBlank(form.yield_processed_qtl)) e.yield_processed_qtl = "Yield of processed nuts is required for a processed sale.";
     else if (Number(form.yield_processed_qtl) <= 0) e.yield_processed_qtl = "Must be a positive value.";
     else if (hasMoreThanTwoDecimals(form.yield_processed_qtl)) e.yield_processed_qtl = "Maximum 2 decimal places.";
   }
-  if (form.input_challenges === "Other" && isBlank(form.input_challenges_other)) {
+  if (isGrading) {
+    if (!form.grading_rows || form.grading_rows.length === 0) {
+      e.grading_rows = "Add at least one grade/variety row.";
+    } else {
+      for (const row of form.grading_rows) {
+        if (row.variety === "Other" && isBlank(row.variety_other)) { e.grading_rows = "Specify the variety for every 'Other' row."; break; }
+        if (isBlank(row.quantity_qtl) || Number(row.quantity_qtl) <= 0) { e.grading_rows = "Every row needs a quantity greater than 0."; break; }
+        if (isBlank(row.rate_inr_per_kg) || Number(row.rate_inr_per_kg) <= 0) { e.grading_rows = "Every row needs a rate greater than 0."; break; }
+      }
+    }
+  }
+  // CR-08: storage duration is whole months, no fractional months.
+  if (!isBlank(form.storage_duration_months) && !isWholeNumber(form.storage_duration_months)) {
+    e.storage_duration_months = "Whole numbers only — no decimals.";
+  }
+  // CR-09: per-provider logistics cost to 2 decimal places.
+  if (!isBlank(form.logistics_cost_inr_per_qtl) && hasMoreThanTwoDecimals(form.logistics_cost_inr_per_qtl)) {
+    e.logistics_cost_inr_per_qtl = "Maximum 2 decimal places.";
+  }
+  if (form.input_challenges?.includes("Other") && isBlank(form.input_challenges_other)) {
     e.input_challenges_other = "Please specify the challenge.";
   }
-  if (form.input_source === "Other" && isBlank(form.input_source_other)) {
+  if (form.input_source?.includes("Other") && isBlank(form.input_source_other)) {
     e.input_source_other = "Please specify the input source.";
   }
-  if (isBlank(form.rate_inr_per_kg)) e.rate_inr_per_kg = "Rate realised is required.";
-  else if (Number(form.rate_inr_per_kg) <= 0) e.rate_inr_per_kg = "Must be greater than 0.";
+  if (isBlank(form.input_source)) e.input_source = "Select at least one input source."; // CR-14
+  if (!isGrading) { // CR-07: a graded sale uses per-row rates instead of one blanket rate
+    if (isBlank(form.rate_inr_per_kg)) e.rate_inr_per_kg = "Rate realised is required.";
+    else if (Number(form.rate_inr_per_kg) <= 0) e.rate_inr_per_kg = "Must be greater than 0.";
+  }
   // Name of FPC/FPO is optional (not every enumerator will know the exact FPC at
   // time of entry) — Cooperative Society / APMC / Any Other are still required.
   if (["Cooperative Society", "APMC", "Any Other"].includes(form.marketing_channel) && isBlank(form.marketing_channel_detail)) {
@@ -213,8 +250,14 @@ function getErrors(form: any): Record<string, string> {
     if (isBlank(form.mech_loan_amount_inr_lakh)) e.mech_loan_amount_inr_lakh = "Loan amount is required.";
     if (isBlank(form.mech_loan_interest_pct)) e.mech_loan_interest_pct = "Interest rate is required.";
   }
-  if (form.input_challenges === "Availability" && isBlank(form.input_purchase_delay_days)) {
+  if (form.input_challenges?.includes("Availability") && isBlank(form.input_purchase_delay_days)) {
     e.input_purchase_delay_days = "Average delay in receiving inputs is required.";
+  } else if (!isBlank(form.input_purchase_delay_days) && !isWholeNumber(form.input_purchase_delay_days)) {
+    e.input_purchase_delay_days = "Whole numbers only — no decimals."; // CR-12
+  }
+  // CR-10: distance of input source to 1 decimal place.
+  if (!isBlank(form.input_distance_km) && hasMoreThanNDecimals(form.input_distance_km, 1)) {
+    e.input_distance_km = "Maximum 1 decimal place.";
   }
   if (form.tech_adoption === "Yes") {
     if (isBlank(form.tech_adoption_detail)) e.tech_adoption_detail = "Please describe the technology used.";
@@ -226,9 +269,12 @@ function getErrors(form: any): Record<string, string> {
     if (isBlank(form.credit_source)) e.credit_source = "Credit source is required.";
     if (form.credit_source === "Other" && isBlank(form.credit_source_other)) e.credit_source_other = "Please specify the credit source.";
     if (isBlank(form.credit_amount_inr)) e.credit_amount_inr = "Loan amount is required.";
+    else if (hasMoreThanTwoDecimals(form.credit_amount_inr)) e.credit_amount_inr = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Interest rate is required.";
     else if (Number(form.credit_interest_rate_pct) < 0 || Number(form.credit_interest_rate_pct) > 20) e.credit_interest_rate_pct = "Enter a value between 0 and 20.";
+    else if (hasMoreThanTwoDecimals(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_repayment_months)) e.credit_repayment_months = "Repayment period is required.";
+    else if (!isWholeNumber(form.credit_repayment_months)) e.credit_repayment_months = "Whole numbers only — no decimals."; // CR-11
   } else if (form.credit_linkage === "No") {
     if (isBlank(form.loan_application_outcome)) e.loan_application_outcome = "Please select the outcome of any previous loan application.";
     if (form.loan_application_outcome === "Rejected" && isBlank(form.loan_rejection_reason)) e.loan_rejection_reason = "Please select a reason for rejection.";
@@ -237,11 +283,21 @@ function getErrors(form: any): Record<string, string> {
     }
   }
   if (form.bank_account === "Yes" && form.overdraft_facility === "Yes" && isBlank(form.overdraft_limit_inr_lakh)) e.overdraft_limit_inr_lakh = "Overdraft limit is required.";
+  else if (!isBlank(form.overdraft_limit_inr_lakh) && hasMoreThanTwoDecimals(form.overdraft_limit_inr_lakh)) e.overdraft_limit_inr_lakh = "Maximum 2 decimal places."; // CR-16
   if (isBlank(form.total_household_income_bracket)) e.total_household_income_bracket = "Please select a household income bracket.";
   if (form.non_farm_income_source?.includes("Other") && isBlank(form.non_farm_income_source_other)) {
     e.non_farm_income_source_other = "Please specify the income source.";
   }
   if (form.kcc_account === "Yes" && isBlank(form.kcc_limit_inr_lakh)) e.kcc_limit_inr_lakh = "KCC limit is required.";
+  else if (!isBlank(form.kcc_limit_inr_lakh) && hasMoreThanTwoDecimals(form.kcc_limit_inr_lakh)) e.kcc_limit_inr_lakh = "Maximum 2 decimal places."; // CR-01
+  // CR-01: Current Outstanding Loan Amount and Credit Gap are always-optional
+  // fields (no "required" state to chain onto), so these checks stand alone.
+  if (!isBlank(form.credit_outstanding_inr_lakh) && hasMoreThanTwoDecimals(form.credit_outstanding_inr_lakh)) {
+    e.credit_outstanding_inr_lakh = "Maximum 2 decimal places.";
+  }
+  if (!isBlank(form.credit_gap_inr_lakh) && hasMoreThanTwoDecimals(form.credit_gap_inr_lakh)) {
+    e.credit_gap_inr_lakh = "Maximum 2 decimal places.";
+  }
   if (form.scheme_availed === "Yes") {
     if (isBlank(form.scheme_name)) e.scheme_name = "Scheme name is required.";
     if (isBlank(form.scheme_benefits)) e.scheme_benefits = "Describe the benefits received.";
@@ -377,12 +433,24 @@ export default function DataEntryWizard() {
   const [opts, setOpts] = useState<Record<string, string[]>>({});
   const { lang } = useLang();
   const [otpStatus, setOtpStatus] = useState<"idle" | "sent" | "verifying">("idle");
+  const [schemeNameInput, setSchemeNameInput] = useState(""); // CR-15: free-text entry for a scheme not in the master list
   const [otpCode, setOtpCode] = useState("");
   // Once a village is picked it locks — accidental edits/deletes are the exact
   // failure mode the client called out. "Change Village" is still possible but
   // requires an explicit confirm, so it's a deliberate action, not a slip.
   const [villageUnlocked, setVillageUnlocked] = useState(false);
   const villageLocked = !!form.village && !villageUnlocked;
+
+  // CR-02: some testers want the original District -> Taluka -> Village cascade
+  // back; others found it slower than searching the village directly (that's
+  // exactly why it was replaced with search in an earlier round). Rather than
+  // re-relitigate this, both are offered — search stays the default, with a
+  // toggle to the cascade. The preference is remembered per-device so an
+  // enumerator doesn't have to re-pick it on every new entry.
+  const [locationMode, setLocationMode] = useState<"search" | "cascade">(
+    () => (localStorage.getItem("gt_location_mode") as "search" | "cascade") || "search"
+  );
+  useEffect(() => localStorage.setItem("gt_location_mode", locationMode), [locationMode]);
 
   useEffect(() => {
     api.villagesFlat().then(setVillagesFlat);
@@ -408,6 +476,23 @@ export default function DataEntryWizard() {
       .filter((v) => v.village.toLowerCase().includes(q) || trVillage(v.village, lang).toLowerCase().includes(q))
       .slice(0, 8);
   }, [villageQuery, villagesFlat, lang]);
+
+  // CR-02 cascade mode: derived entirely from the already-loaded villagesFlat
+  // list (no extra API calls needed) rather than the separate
+  // districts()/talukas()/villages() endpoints — those still exist server-side
+  // but every value they'd return is already present in villagesFlat.
+  const cascadeDistricts = useMemo(
+    () => Array.from(new Set(villagesFlat.map((v) => v.district))).sort(),
+    [villagesFlat]
+  );
+  const cascadeTalukas = useMemo(
+    () => Array.from(new Set(villagesFlat.filter((v) => v.district === form.district).map((v) => v.taluka))).sort(),
+    [villagesFlat, form.district]
+  );
+  const cascadeVillages = useMemo(
+    () => villagesFlat.filter((v) => v.district === form.district && v.taluka === form.taluka).map((v) => v.village).sort(),
+    [villagesFlat, form.district, form.taluka]
+  );
 
   const selectVillage = (v: { village: string; taluka: string; district: string }) => {
     setForm((f: any) => ({ ...f, village: v.village, taluka: v.taluka, district: v.district }));
@@ -437,11 +522,28 @@ export default function DataEntryWizard() {
           irrigation_source: s.irrigation_source ? s.irrigation_source.split(",") : [],
           intercrop_crops: s.intercrop_crops ? s.intercrop_crops.split(",") : [],
           non_farm_income_source: s.non_farm_income_source ? s.non_farm_income_source.split(",") : [],
+          input_source: s.input_source ? s.input_source.split(",") : [], // CR-14
+          input_challenges: s.input_challenges ? s.input_challenges.split(",") : [], // CR-14
+          scheme_name: s.scheme_name ? s.scheme_name.split(",") : [], // CR-15
+          grading_rows: s.grading_rows ? JSON.parse(s.grading_rows) : [], // CR-05
         });
-        if (s.plot_boundary) {
+        // CR-17: prefer the multi-plot list when the backend returns one (every
+        // record saved via the new flow has it); fall back to the legacy single
+        // boundary for older records that predate multi-plot support.
+        if (Array.isArray(s.plots) && s.plots.length > 0) {
           try {
-            setPlotPoints(JSON.parse(s.plot_boundary));
-            if (s.plot_boundary_method) setPlotMethod(s.plot_boundary_method as CaptureMethod);
+            setPlots(s.plots.map((p: any, i: number) => ({
+              key: `p${i}`,
+              label: p.label || `Plot ${i + 1}`,
+              reportedArea: p.reported_area_acres != null ? String(p.reported_area_acres) : "",
+              method: (p.method as CaptureMethod) || "gps",
+              points: p.points || [],
+            })));
+          } catch {}
+        } else if (s.plot_boundary) {
+          try {
+            const points = JSON.parse(s.plot_boundary);
+            setPlots([{ key: "p0", label: "Plot 1", reportedArea: s.plot_boundary_area_acres != null ? String(s.plot_boundary_area_acres) : "", method: (s.plot_boundary_method as CaptureMethod) || "gps", points }]);
           } catch {}
         }
       });
@@ -470,6 +572,19 @@ export default function DataEntryWizard() {
     clearError(k);
   };
 
+  // CR-05: dynamic grading/variety table for processed areca sales.
+  const addGradingRow = () => {
+    setForm((f: any) => ({ ...f, grading_rows: [...f.grading_rows, { variety: "Rashi", variety_other: "", quantity_qtl: "", rate_inr_per_kg: "" }] }));
+    clearError("grading_rows");
+  };
+  const removeGradingRow = (idx: number) => {
+    setForm((f: any) => ({ ...f, grading_rows: f.grading_rows.filter((_: any, i: number) => i !== idx) }));
+  };
+  const updateGradingRow = (idx: number, key: string, value: string) => {
+    setForm((f: any) => ({ ...f, grading_rows: f.grading_rows.map((r: any, i: number) => (i === idx ? { ...r, [key]: value } : r)) }));
+    clearError("grading_rows");
+  };
+
   // No SMS gateway is wired up yet (needs a provider — Twilio/MSG91/etc. — and
   // credentials from the client), so this simulates the OTP round trip client-side
   // rather than actually texting the farmer. Swap sendOtp/verifyOtp for real API
@@ -490,12 +605,19 @@ export default function DataEntryWizard() {
   const computedIncome = useMemo(() => {
     const includesRaw = form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca";
     const includesProcessed = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
-    const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
-    const r = parseFloat(form.rate_inr_per_kg) || 0;
+    const isGrading = includesProcessed && form.grading_done === "Yes"; // CR-05/CR-07
     const c = parseFloat(form.cultivation_cost_inr) || 0;
     const p = includesProcessed ? (parseFloat(form.processing_cost_inr) || 0) : 0;
-    return Math.round(y * r * 100 - c - p);
-  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.cultivation_cost_inr, form.processing_cost_inr, form.sale_type]);
+    let gross = 0;
+    if (isGrading) {
+      gross += (form.grading_rows || []).reduce((sum: number, row: any) => sum + (parseFloat(row.quantity_qtl) || 0) * (parseFloat(row.rate_inr_per_kg) || 0) * 100, 0);
+      if (includesRaw) gross += (parseFloat(form.yield_raw_qtl) || 0) * (parseFloat(form.rate_inr_per_kg) || 0) * 100;
+    } else {
+      const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
+      gross = y * (parseFloat(form.rate_inr_per_kg) || 0) * 100;
+    }
+    return Math.round(gross - c - p);
+  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.cultivation_cost_inr, form.processing_cost_inr, form.sale_type, form.grading_done, form.grading_rows]);
 
   // Cultivation cost is captured a whole step before yield/rate, so the income
   // preview would otherwise flash a large negative number (just -cost) the
@@ -505,10 +627,14 @@ export default function DataEntryWizard() {
   const hasIncomeInputs = useMemo(() => {
     const includesRaw = form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca";
     const includesProcessed = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+    const isGrading = includesProcessed && form.grading_done === "Yes"; // CR-05/CR-07
+    if (isGrading) {
+      return (form.grading_rows || []).some((row: any) => (parseFloat(row.quantity_qtl) || 0) > 0 && (parseFloat(row.rate_inr_per_kg) || 0) > 0);
+    }
     const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
     const r = parseFloat(form.rate_inr_per_kg) || 0;
     return y > 0 && r > 0;
-  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.sale_type]);
+  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.sale_type, form.grading_done, form.grading_rows]);
 
   const doLookup = async () => {
     setLookupMsg(null);
@@ -531,20 +657,51 @@ export default function DataEntryWizard() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
-  const [plotMethod, setPlotMethod] = useState<CaptureMethod>("gps");
-  const [plotPoints, setPlotPoints] = useState<PlotBoundary>([]);
-  const plotArea = areaInAcres(plotPoints);
-  const plotValidation = validateBoundary(plotPoints);
+  // CR-17: multiple plot/land records per farmer, each with its own
+  // farmer-reported area and an optional GPS-measured boundary (draw/Excel/
+  // GPS, same capture methods as the old single-plot flow). `key` is a
+  // client-only identity for list rendering/updates — never sent to the API.
+  const [plots, setPlots] = useState<
+    { key: string; label: string; reportedArea: string; method: CaptureMethod; points: PlotBoundary }[]
+  >([{ key: "p0", label: "Plot 1", reportedArea: "", method: "gps", points: [] }]);
 
-  const switchPlotMethod = (next: CaptureMethod) => {
-    if (next === plotMethod) return;
-    if (plotPoints.length > 0) {
-      const ok = window.confirm("Switching methods will discard the in-progress plot boundary. Continue?");
-      if (!ok) return;
-    }
-    setPlotPoints([]);
-    setPlotMethod(next);
+  const addPlot = () => {
+    setPlots((prev) => [...prev, { key: `p${Date.now()}`, label: `Plot ${prev.length + 1}`, reportedArea: "", method: "gps", points: [] }]);
   };
+  const removePlot = (key: string) => {
+    setPlots((prev) => (prev.length > 1 ? prev.filter((p) => p.key !== key) : prev));
+  };
+  const updatePlot = (key: string, patch: Partial<{ label: string; reportedArea: string; points: PlotBoundary }>) => {
+    setPlots((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  };
+  const switchPlotMethod = (key: string, next: CaptureMethod) => {
+    setPlots((prev) => {
+      const plot = prev.find((p) => p.key === key);
+      if (!plot || next === plot.method) return prev;
+      if (plot.points.length > 0) {
+        const ok = window.confirm("Switching methods will discard the in-progress plot boundary. Continue?");
+        if (!ok) return prev;
+      }
+      return prev.map((p) => (p.key === key ? { ...p, method: next, points: [] } : p));
+    });
+  };
+
+  // At least one plot needs a captured, valid boundary before submit — the
+  // same mandatory-geo-tag rule as before, just across the set of plots
+  // instead of a single field. Reported area is required on every plot
+  // (enforced in getErrors-style validation at submit time, see `submit`).
+  const plotsValidation = useMemo(() => {
+    const anyValidBoundary = plots.some((p) => validateBoundary(p.points).valid);
+    if (!anyValidBoundary) return { valid: false, error: "At least one plot needs a captured boundary — walk/draw/upload at least 3 points." };
+    const badBoundary = plots.find((p) => p.points.length > 0 && !validateBoundary(p.points).valid);
+    if (badBoundary) return { valid: false, error: validateBoundary(badBoundary.points).error };
+    const missingArea = plots.find((p) => isBlank(p.reportedArea) || Number(p.reportedArea) <= 0);
+    if (missingArea) return { valid: false, error: `${missingArea.label}: reported area is required and must be greater than 0.` };
+    return { valid: true };
+  }, [plots]);
+
+  const totalReportedArea = useMemo(() => plots.reduce((sum, p) => sum + (parseFloat(p.reportedArea) || 0), 0), [plots]);
+  const totalGpsArea = useMemo(() => plots.reduce((sum, p) => sum + (validateBoundary(p.points).valid ? areaInAcres(p.points) : 0), 0), [plots]);
 
   // Uses @capacitor/geolocation so the same call works via the browser
   // Geolocation API on web and via native GPS on the packaged Android app.
@@ -626,16 +783,19 @@ export default function DataEntryWizard() {
       setSubmitError(t("Please fix {n} error(s) before submitting.", lang).replace("{n}", String(Object.keys(validationErrors).length)));
       return;
     }
-    if (!plotValidation.valid) {
+    if (!plotsValidation.valid) {
       setStep(STEPS.length - 1);
-      setSubmitError(t("Plot boundary is mandatory — capture it via Draw on Map, Excel upload, or GPS walk before submitting.", lang));
+      setSubmitError(plotsValidation.error || t("Plot boundary is mandatory — capture it via Draw on Map, Excel upload, or GPS walk before submitting.", lang));
       return;
     }
 
     setSubmitting(true);
+    const includesProcessedNow = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+    const isGradingNow = includesProcessedNow && form.grading_done === "Yes"; // CR-05/CR-07
     const payload = {
       ...form,
       age: parseInt(form.age) || 0,
+      survey_year: form.survey_year ? parseInt(form.survey_year) : null, // CR-18
       society_since_year: form.society_since_year ? parseInt(form.society_since_year) : null,
       society_benefits: form.society_benefits.join(","),
       land_own_acres: parseFloat(form.land_own_acres) || 0,
@@ -648,7 +808,16 @@ export default function DataEntryWizard() {
       yield_raw_qtl: (form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca") ? (parseFloat(form.yield_raw_qtl) || 0) : null,
       yield_processed_qtl: (form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") ? (parseFloat(form.yield_processed_qtl) || 0) : null,
       processing_cost_inr: form.processing_cost_inr ? parseFloat(form.processing_cost_inr) : null,
-      rate_inr_per_kg: parseFloat(form.rate_inr_per_kg) || 0,
+      grading_done: includesProcessedNow ? form.grading_done : null, // CR-05
+      grading_rows: isGradingNow // CR-05
+        ? JSON.stringify(form.grading_rows.map((r: any) => ({
+            variety: r.variety, variety_other: r.variety === "Other" ? r.variety_other : "",
+            quantity_qtl: parseFloat(r.quantity_qtl) || 0, rate_inr_per_kg: parseFloat(r.rate_inr_per_kg) || 0,
+          })))
+        : null,
+      rate_inr_per_kg: isGradingNow
+        ? (form.sale_type === "Sold both raw and processed areca" ? (parseFloat(form.rate_inr_per_kg) || 0) : null) // only the raw portion (if any) still needs a blanket rate
+        : (parseFloat(form.rate_inr_per_kg) || 0), // CR-07
       storage_duration_months: form.storage_duration_months ? parseFloat(form.storage_duration_months) : null,
       storage_loan_amount_inr: form.storage_loan_amount_inr ? parseFloat(form.storage_loan_amount_inr) : null,
       storage_loan_interest_pct: form.storage_loan_interest_pct ? parseFloat(form.storage_loan_interest_pct) : null,
@@ -677,13 +846,27 @@ export default function DataEntryWizard() {
       credit_gap_inr_lakh: form.credit_gap_inr_lakh ? parseFloat(form.credit_gap_inr_lakh) : null,
       kcc_limit_inr_lakh: form.kcc_limit_inr_lakh ? parseFloat(form.kcc_limit_inr_lakh) : null,
       irrigation_source: form.irrigation_source.join(","),
+      input_source: (form.input_source || []).join(","), // CR-14
+      input_challenges: (form.input_challenges || []).join(","), // CR-14
       input_distance_km: form.input_distance_km ? parseFloat(form.input_distance_km) : null,
       input_purchase_delay_days: form.input_purchase_delay_days ? parseInt(form.input_purchase_delay_days) : null,
+      scheme_name: (form.scheme_name || []).join(","), // CR-15
       geo_lat: form.geo_lat ? parseFloat(form.geo_lat) : null,
       geo_long: form.geo_long ? parseFloat(form.geo_long) : null,
-      plot_boundary: plotValidation.valid ? JSON.stringify(plotPoints) : null,
-      plot_boundary_area_acres: plotValidation.valid ? plotArea : null,
-      plot_boundary_method: plotValidation.valid ? plotMethod : null,
+      // CR-17: multiple plots. Legacy plot_boundary/* fields are still sent
+      // (mirroring plot[0]) purely so an older build of this payload shape
+      // would degrade gracefully — the backend recomputes them from `plots`
+      // itself and ignores these three whenever `plots` is present.
+      plot_boundary: validateBoundary(plots[0].points).valid ? JSON.stringify(plots[0].points) : null,
+      plot_boundary_area_acres: validateBoundary(plots[0].points).valid ? areaInAcres(plots[0].points) : null,
+      plot_boundary_method: validateBoundary(plots[0].points).valid ? plots[0].method : null,
+      plots: plots.map((p) => ({
+        label: p.label,
+        reported_area_acres: parseFloat(p.reportedArea) || 0,
+        points: validateBoundary(p.points).valid ? p.points : null,
+        area_acres: validateBoundary(p.points).valid ? areaInAcres(p.points) : null,
+        method: validateBoundary(p.points).valid ? p.method : null,
+      })),
     };
     delete payload.id;
     delete payload.entry_timestamp;
@@ -830,78 +1013,137 @@ export default function DataEntryWizard() {
                 <Field label="Farmer Unique ID" hint={form.farmer_id ? undefined : t("Auto-generated by the system once this survey is submitted.", lang)}>
                   <input className="gt-input bg-[#F6F4F9]" readOnly value={form.farmer_id || t("Will be assigned on submit", lang)} />
                 </Field>
+                <Field label="Survey Year / Season" hint="CR-18: which year/season this survey reports on — used to compare a farmer's data across years.">
+                  <select className="gt-input" value={form.survey_year} onChange={(e) => set("survey_year", e.target.value)}>
+                    {YEAR_OPTIONS.map((y) => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </Field>
               </div>
             </SubSection>
 
             <SubSection icon={MapPin} title="Location Details">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
                 <div className="text-sm text-[var(--gt-text-muted)]">
-                  {villageLocked
-                    ? t("Village is locked once selected — use \"Change Village\" if it was picked in error.", lang)
-                    : t("Start typing the village name — Taluka and District fill in automatically.", lang)}
+                  {locationMode === "search"
+                    ? (villageLocked
+                        ? t("Village is locked once selected — use \"Change Village\" if it was picked in error.", lang)
+                        : t("Start typing the village name — Taluka and District fill in automatically.", lang))
+                    : "Pick District, then Taluka, then Village."}
                 </div>
-                {villageLocked && (
+                <div className="flex items-center gap-3 shrink-0">
+                  {villageLocked && (
+                    <button
+                      type="button"
+                      className="text-xs text-[var(--gt-purple)] underline"
+                      onClick={() => {
+                        if (window.confirm("Changing the village is not normally allowed once entered. Continue only if this was selected in error. Proceed?")) {
+                          setVillageUnlocked(true);
+                          setVillageQuery("");
+                        }
+                      }}
+                    >
+                      {t("Change Village", lang)}
+                    </button>
+                  )}
+                  {/* CR-02: lets a user who prefers the old cascade switch to it,
+                      without taking the village-first search away from everyone
+                      else — both read/write the same form.village/taluka/district. */}
                   <button
                     type="button"
-                    className="text-xs text-[var(--gt-purple)] underline shrink-0 ml-2"
-                    onClick={() => {
-                      if (window.confirm("Changing the village is not normally allowed once entered. Continue only if this was selected in error. Proceed?")) {
-                        setVillageUnlocked(true);
-                        setVillageQuery("");
-                      }
-                    }}
+                    className="text-xs text-[var(--gt-purple)] underline"
+                    onClick={() => setLocationMode(locationMode === "search" ? "cascade" : "search")}
                   >
-                    {t("Change Village", lang)}
+                    {locationMode === "search" ? "Switch to District → Taluka → Village" : "Switch to Village Search"}
                   </button>
-                )}
+                </div>
               </div>
 
-              <div className="grid md:grid-cols-3 gap-x-4">
-                <Field label={tr("village", lang)} required error={errors.village}>
-                  {villageLocked ? (
-                    <input className="gt-input bg-[#F6F4F9] disabled:text-[var(--gt-text-muted)]" readOnly value={trVillage(form.village, lang)} />
-                  ) : (
-                    <div className="relative">
-                      <input
-                        className="gt-input"
-                        placeholder={lang === "kn" ? "ಗ್ರಾಮದ ಹೆಸರು ಟೈಪ್ ಮಾಡಿ…" : "Type a village name…"}
-                        value={villageQuery}
-                        onChange={(e) => { setVillageQuery(e.target.value); setShowVillageSuggestions(true); }}
-                        onFocus={() => setShowVillageSuggestions(true)}
-                        onBlur={() => setTimeout(() => setShowVillageSuggestions(false), 150)}
-                      />
-                      {showVillageSuggestions && villageQuery.trim() && (
-                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-[var(--gt-border)] rounded-lg shadow-lg max-h-56 overflow-y-auto">
-                          {villageMatches.length > 0 ? (
-                            villageMatches.map((v) => (
-                              <button
-                                type="button"
-                                key={`${v.village}-${v.taluka}`}
-                                className="w-full text-left px-3 py-2 text-sm hover:bg-[#F1EBF7] border-b border-[var(--gt-border)] last:border-none"
-                                onMouseDown={() => selectVillage(v)}
-                              >
-                                <div className="font-medium">{trVillage(v.village, lang)}</div>
-                                <div className="text-[11px] text-[var(--gt-text-muted)]">{trTaluka(v.taluka, lang)}, {trDistrict(v.district, lang)}</div>
-                              </button>
-                            ))
-                          ) : (
-                            <div className="px-3 py-2 text-sm text-[var(--gt-text-muted)]">{t("No matching village found.", lang)}</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </Field>
-                <Field label={`${tr("taluka", lang)} ${t("(auto-filled)", lang)}`} error={errors.taluka}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={form.taluka ? trTaluka(form.taluka, lang) : "—"} />
-                </Field>
-                <Field label={`${tr("district", lang)} ${t("(auto-filled)", lang)}`} error={errors.district}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={form.district ? trDistrict(form.district, lang) : "—"} />
-                </Field>
-                <Field label={tr("state", lang)}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
-                </Field>
-              </div>
+              {locationMode === "search" ? (
+                <div className="grid md:grid-cols-3 gap-x-4">
+                  <Field label={tr("village", lang)} required error={errors.village}>
+                    {villageLocked ? (
+                      <input className="gt-input bg-[#F6F4F9] disabled:text-[var(--gt-text-muted)]" readOnly value={trVillage(form.village, lang)} />
+                    ) : (
+                      <div className="relative">
+                        <input
+                          className="gt-input"
+                          placeholder={lang === "kn" ? "ಗ್ರಾಮದ ಹೆಸರು ಟೈಪ್ ಮಾಡಿ…" : "Type a village name…"}
+                          value={villageQuery}
+                          onChange={(e) => { setVillageQuery(e.target.value); setShowVillageSuggestions(true); }}
+                          onFocus={() => setShowVillageSuggestions(true)}
+                          onBlur={() => setTimeout(() => setShowVillageSuggestions(false), 150)}
+                        />
+                        {showVillageSuggestions && villageQuery.trim() && (
+                          <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-[var(--gt-border)] rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                            {villageMatches.length > 0 ? (
+                              villageMatches.map((v) => (
+                                <button
+                                  type="button"
+                                  key={`${v.village}-${v.taluka}`}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-[#F1EBF7] border-b border-[var(--gt-border)] last:border-none"
+                                  onMouseDown={() => selectVillage(v)}
+                                >
+                                  <div className="font-medium">{trVillage(v.village, lang)}</div>
+                                  <div className="text-[11px] text-[var(--gt-text-muted)]">{trTaluka(v.taluka, lang)}, {trDistrict(v.district, lang)}</div>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-sm text-[var(--gt-text-muted)]">{t("No matching village found.", lang)}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Field>
+                  <Field label={`${tr("taluka", lang)} ${t("(auto-filled)", lang)}`} error={errors.taluka}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={form.taluka ? trTaluka(form.taluka, lang) : "—"} />
+                  </Field>
+                  <Field label={`${tr("district", lang)} ${t("(auto-filled)", lang)}`} error={errors.district}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={form.district ? trDistrict(form.district, lang) : "—"} />
+                  </Field>
+                  <Field label={tr("state", lang)}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
+                  </Field>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-3 gap-x-4">
+                  <Field label={tr("district", lang)} required error={errors.district}>
+                    <select
+                      className="gt-input"
+                      value={form.district}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, district: e.target.value, taluka: "", village: "" })); clearError("district"); clearError("taluka"); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeDistricts.map((d) => <option key={d} value={d}>{trDistrict(d, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("taluka", lang)} required error={errors.taluka}>
+                    <select
+                      className="gt-input"
+                      value={form.taluka}
+                      disabled={!form.district}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, taluka: e.target.value, village: "" })); clearError("taluka"); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeTalukas.map((tk) => <option key={tk} value={tk}>{trTaluka(tk, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("village", lang)} required error={errors.village}>
+                    <select
+                      className="gt-input"
+                      value={form.village}
+                      disabled={!form.taluka}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, village: e.target.value })); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeVillages.map((v) => <option key={v} value={v}>{trVillage(v, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("state", lang)}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
+                  </Field>
+                </div>
+              )}
             </SubSection>
 
             <SubSection icon={Handshake} title="Society / FPC Linkage">
@@ -989,10 +1231,13 @@ export default function DataEntryWizard() {
               <div className="grid md:grid-cols-2 gap-x-4">
                 <Field label="Total Annual Cost of Cultivation (INR)" required error={errors.cultivation_cost_inr}><input max="100000000" type="number" step="1" className="gt-input" value={form.cultivation_cost_inr} onChange={(e) => setNonNeg("cultivation_cost_inr", e.target.value)} /></Field>
                 <Field label="Sale Type" required>
+                  {/* "Sold both raw and processed areca" removed from the picker per
+                      client request (ENT-14) — existing records that already used it
+                      still read/edit correctly, since every downstream check below
+                      still recognizes the value; only new entries can no longer pick it. */}
                   <select className="gt-input" value={form.sale_type} onChange={(e) => set("sale_type", e.target.value)}>
                     <option value="Sold raw areca">{t("Sold raw areca", lang)}</option>
                     <option value="Sold processed areca">{t("Sold processed areca", lang)}</option>
-                    <option value="Sold both raw and processed areca">{t("Sold both raw and processed areca", lang)}</option>
                   </select>
                 </Field>
                 {(form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca") && (
@@ -1011,7 +1256,7 @@ export default function DataEntryWizard() {
             <SubSection icon={Coins} title="Sales, Marketing & Income" first>
               <div className="grid md:grid-cols-2 gap-x-4">
                 {(form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") && (
-                  <Field label="Total Processing Cost (INR)" required error={errors.processing_cost_inr} hint="Required for Sale Type = Processed or Both"><input max="100000000" type="number" className="gt-input" value={form.processing_cost_inr} onChange={(e) => setNonNeg("processing_cost_inr", e.target.value)} /></Field>
+                  <Field label="Total Processing Cost (INR)" required error={errors.processing_cost_inr} hint="Required for Sale Type = Processed or Both"><input max="100000000" step="0.01" type="number" className="gt-input" value={form.processing_cost_inr} onChange={(e) => setNonNeg("processing_cost_inr", e.target.value)} /></Field>
                 )}
                 <Field label="Marketing Channel" required>
                   <select className="gt-input" value={form.marketing_channel} onChange={(e) => set("marketing_channel", e.target.value)}>
@@ -1037,7 +1282,47 @@ export default function DataEntryWizard() {
                     <input className="gt-input" value={form.marketing_channel_detail} onChange={(e) => set("marketing_channel_detail", e.target.value)} />
                   </Field>
                 )}
-                <Field label="Rate Realised (INR/kg)" required error={errors.rate_inr_per_kg}><input type="number" className="gt-input" value={form.rate_inr_per_kg} onChange={(e) => setNonNeg("rate_inr_per_kg", e.target.value)} /></Field>
+                {(form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") && (
+                  <Field label="Does the farmer grade/sort the processed produce?" required hint="CR-05: graded produce is priced per variety, not at one blanket rate.">
+                    <select className="gt-input" value={form.grading_done} onChange={(e) => set("grading_done", e.target.value)}>
+                      <option value="No">{t("No", lang)}</option>
+                      <option value="Yes">{t("Yes", lang)}</option>
+                    </select>
+                  </Field>
+                )}
+                {!(form.sale_type === "Sold processed areca" && form.grading_done === "Yes") && (
+                  // CR-07: hidden when the farmer grades/sorts — each row below carries its own rate instead.
+                  <Field label="Rate Realised (INR/kg)" required error={errors.rate_inr_per_kg}><input type="number" className="gt-input" value={form.rate_inr_per_kg} onChange={(e) => setNonNeg("rate_inr_per_kg", e.target.value)} /></Field>
+                )}
+                {form.sale_type === "Sold processed areca" && form.grading_done === "Yes" && (
+                  <div className="md:col-span-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-[var(--gt-text)]">{t("Grade / Variety-wise Sales", lang)} *</label>
+                      <button type="button" onClick={addGradingRow} className="text-sm text-[var(--gt-purple-dark)] font-medium">+ {t("Add Row", lang)}</button>
+                    </div>
+                    {errors.grading_rows && <div className="text-xs text-red-600 mb-2">{errors.grading_rows}</div>}
+                    <div className="space-y-2">
+                      {(form.grading_rows || []).map((row: any, idx: number) => (
+                        <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-start">
+                          <div>
+                            <select className="gt-input" value={row.variety} onChange={(e) => updateGradingRow(idx, "variety", e.target.value)}>
+                              {GRADE_VARIETIES.map((v) => <option key={v} value={v}>{t(v, lang)}</option>)}
+                            </select>
+                            {row.variety === "Other" && (
+                              <input className="gt-input mt-1" placeholder={t("Specify variety", lang)} value={row.variety_other} onChange={(e) => updateGradingRow(idx, "variety_other", e.target.value)} />
+                            )}
+                          </div>
+                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Quantity (Qtl)", lang)} value={row.quantity_qtl} onChange={(e) => updateGradingRow(idx, "quantity_qtl", e.target.value.replace(/^-+/, ""))} />
+                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Rate (INR/kg)", lang)} value={row.rate_inr_per_kg} onChange={(e) => updateGradingRow(idx, "rate_inr_per_kg", e.target.value.replace(/^-+/, ""))} />
+                          <button type="button" onClick={() => removeGradingRow(idx)} className="gt-input px-3 text-red-600">×</button>
+                        </div>
+                      ))}
+                      {(form.grading_rows || []).length === 0 && (
+                        <div className="text-sm text-[var(--gt-text-muted)]">{t("No rows yet — add at least one grade/variety.", lang)}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <Field label="Month of Sale" required>
                   <select className="gt-input" value={form.sale_month} onChange={(e) => set("sale_month", e.target.value)}>
                     {MONTHS.map((mo) => <option key={mo} value={mo}>{t(mo, lang)}</option>)}
@@ -1056,7 +1341,7 @@ export default function DataEntryWizard() {
 
             <SubSection icon={Warehouse} title="Storage & Logistics">
               <div className="grid md:grid-cols-2 gap-x-4">
-                <Field label="Areca Stored - Duration (Months)"><input type="number" className="gt-input" value={form.storage_duration_months} onChange={(e) => setNonNeg("storage_duration_months", e.target.value)} /></Field>
+                <Field label="Areca Stored - Duration (Months)" error={errors.storage_duration_months}><input type="number" step="1" className="gt-input" value={form.storage_duration_months} onChange={(e) => setNonNeg("storage_duration_months", e.target.value)} /></Field>
                 <Field label="Storage Source">
                   <select className="gt-input" value={form.storage_source} onChange={(e) => set("storage_source", e.target.value)}>
                     <option value="">{t("Select", lang)}</option>
@@ -1091,7 +1376,7 @@ export default function DataEntryWizard() {
                   </Field>
                 )}
                 {form.logistics_provider && (
-                  <Field label="Provider-wise Cost (INR/Qtl)"><input type="number" className="gt-input" value={form.logistics_cost_inr_per_qtl} onChange={(e) => setNonNeg("logistics_cost_inr_per_qtl", e.target.value)} /></Field>
+                  <Field label="Provider-wise Cost (INR/Qtl)" error={errors.logistics_cost_inr_per_qtl}><input type="number" step="0.01" className="gt-input" value={form.logistics_cost_inr_per_qtl} onChange={(e) => setNonNeg("logistics_cost_inr_per_qtl", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1182,31 +1467,29 @@ export default function DataEntryWizard() {
 
             <SubSection icon={Truck} title="Input Supply Chain">
               <div className="grid md:grid-cols-2 gap-x-4">
-                <Field label="Source of Input Purchase" required>
-                  <select className="gt-input" value={form.input_source} onChange={(e) => set("input_source", e.target.value)}>
-                    {(opts.input_source || []).map((o) => <option key={o} value={o}>{t(o, lang)}</option>)}
-                  </select>
+                <Field label="Source of Input Purchase" required error={errors.input_source}>
+                  {/* CR-14: multiple input sources can apply (e.g. both a Cooperative
+                      Society and a Local Input Shop), so this is multi-select. */}
+                  <MultiChip options={opts.input_source || []} value={form.input_source || []} onToggle={(v) => toggleMulti("input_source", v)} />
                 </Field>
-                {form.input_source === "Other" && (
+                {form.input_source?.includes("Other") && (
                   <Field label="Specify Input Source" required error={errors.input_source_other} hint="Required because 'Other' input source is selected">
                     <input className="gt-input" value={form.input_source_other} onChange={(e) => set("input_source_other", e.target.value)} />
                   </Field>
                 )}
-                <Field label="Distance of Input Source (Km)" error={errors.input_distance_km}><input type="number" min="0" className="gt-input" value={form.input_distance_km} onChange={(e) => setNonNeg("input_distance_km", e.target.value)} /></Field>
+                <Field label="Distance of Input Source (Km)" error={errors.input_distance_km}><input type="number" min="0" step="0.1" className="gt-input" value={form.input_distance_km} onChange={(e) => setNonNeg("input_distance_km", e.target.value)} /></Field>
                 <Field label="Challenges in Input Purchase">
-                  <select className="gt-input" value={form.input_challenges} onChange={(e) => set("input_challenges", e.target.value)}>
-                    <option value="">{t("Select", lang)}</option>
-                    {(opts.input_challenges || []).map((o) => <option key={o} value={o}>{t(o, lang)}</option>)}
-                  </select>
+                  {/* CR-14: multi-select — a farmer can face more than one challenge. */}
+                  <MultiChip options={opts.input_challenges || []} value={form.input_challenges || []} onToggle={(v) => toggleMulti("input_challenges", v)} />
                 </Field>
-                {form.input_challenges === "Other" && (
+                {form.input_challenges?.includes("Other") && (
                   <Field label="Specify Challenge" required error={errors.input_challenges_other} hint="Required because 'Other' challenge is selected">
                     <input className="gt-input" value={form.input_challenges_other} onChange={(e) => set("input_challenges_other", e.target.value)} />
                   </Field>
                 )}
-                {form.input_challenges === "Availability" && (
+                {form.input_challenges?.includes("Availability") && (
                   <Field label="Average Delay in Receiving Inputs (Days)" required error={errors.input_purchase_delay_days} hint="Required because 'Availability' is selected as a challenge">
-                    <input type="number" min="0" className="gt-input" value={form.input_purchase_delay_days} onChange={(e) => setNonNeg("input_purchase_delay_days", e.target.value)} />
+                    <input type="number" min="0" step="1" className="gt-input" value={form.input_purchase_delay_days} onChange={(e) => setNonNeg("input_purchase_delay_days", e.target.value)} />
                   </Field>
                 )}
               </div>
@@ -1249,7 +1532,7 @@ export default function DataEntryWizard() {
                   <Field label="Overdraft Facility Available?" required><YesNo value={form.overdraft_facility} onChange={(v) => set("overdraft_facility", v)} /></Field>
                 )}
                 {form.bank_account === "Yes" && form.overdraft_facility === "Yes" && (
-                  <Field label="Overdraft Limit (INR Lakh)" required error={errors.overdraft_limit_inr_lakh} hint="Required because Overdraft Facility = Yes"><input max="1000" type="number" className="gt-input" value={form.overdraft_limit_inr_lakh} onChange={(e) => setNonNeg("overdraft_limit_inr_lakh", e.target.value)} /></Field>
+                  <Field label="Overdraft Limit (INR Lakh)" required error={errors.overdraft_limit_inr_lakh} hint="Required because Overdraft Facility = Yes"><input max="1000" step="0.01" type="number" className="gt-input" value={form.overdraft_limit_inr_lakh} onChange={(e) => setNonNeg("overdraft_limit_inr_lakh", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1270,10 +1553,10 @@ export default function DataEntryWizard() {
                         <input className="gt-input" value={form.credit_source_other} onChange={(e) => set("credit_source_other", e.target.value)} />
                       </Field>
                     )}
-                    <Field label="Amount (INR)" required error={errors.credit_amount_inr} hint="Required because Credit Linkage = Yes"><input max="100000000" type="number" className="gt-input" value={form.credit_amount_inr} onChange={(e) => setNonNeg("credit_amount_inr", e.target.value)} /></Field>
-                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="20" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
-                    <Field label="Repayment Period (Months)" required error={errors.credit_repayment_months} hint="Required because Credit Linkage = Yes"><input type="number" className="gt-input" value={form.credit_repayment_months} onChange={(e) => setNonNeg("credit_repayment_months", e.target.value)} /></Field>
-                    <Field label="Current Outstanding Loan Amount (INR Lakh)"><input max="1000" type="number" className="gt-input" value={form.credit_outstanding_inr_lakh} onChange={(e) => setNonNeg("credit_outstanding_inr_lakh", e.target.value)} /></Field>
+                    <Field label="Amount (INR)" required error={errors.credit_amount_inr} hint="Required because Credit Linkage = Yes"><input max="100000000" step="0.01" type="number" className="gt-input" value={form.credit_amount_inr} onChange={(e) => setNonNeg("credit_amount_inr", e.target.value)} /></Field>
+                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="20" step="0.01" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
+                    <Field label="Repayment Period (Months)" required error={errors.credit_repayment_months} hint="Required because Credit Linkage = Yes"><input type="number" step="1" className="gt-input" value={form.credit_repayment_months} onChange={(e) => setNonNeg("credit_repayment_months", e.target.value)} /></Field>
+                    <Field label="Current Outstanding Loan Amount (INR Lakh)" error={errors.credit_outstanding_inr_lakh}><input max="1000" step="0.01" type="number" className="gt-input" value={form.credit_outstanding_inr_lakh} onChange={(e) => setNonNeg("credit_outstanding_inr_lakh", e.target.value)} /></Field>
                   </>
                 )}
                 {form.credit_linkage === "No" && (
@@ -1299,10 +1582,10 @@ export default function DataEntryWizard() {
                     )}
                   </>
                 )}
-                <Field label="Gap Between Required Credit and Credit Availed (INR Lakh)"><input max="1000" type="number" className="gt-input" value={form.credit_gap_inr_lakh} onChange={(e) => setNonNeg("credit_gap_inr_lakh", e.target.value)} /></Field>
+                <Field label="Gap Between Required Credit and Credit Availed (INR Lakh)" error={errors.credit_gap_inr_lakh}><input max="1000" step="0.01" type="number" className="gt-input" value={form.credit_gap_inr_lakh} onChange={(e) => setNonNeg("credit_gap_inr_lakh", e.target.value)} /></Field>
                 <Field label="Do You Have a KCC Account?" required><YesNo value={form.kcc_account} onChange={(v) => set("kcc_account", v)} /></Field>
                 {form.kcc_account === "Yes" && (
-                  <Field label="KCC Limit (INR Lakh)" required error={errors.kcc_limit_inr_lakh} hint="Required because you have a KCC Account"><input max="1000" type="number" className="gt-input" value={form.kcc_limit_inr_lakh} onChange={(e) => setNonNeg("kcc_limit_inr_lakh", e.target.value)} /></Field>
+                  <Field label="KCC Limit (INR Lakh)" required error={errors.kcc_limit_inr_lakh} hint="Required because you have a KCC Account"><input max="1000" step="0.01" type="number" className="gt-input" value={form.kcc_limit_inr_lakh} onChange={(e) => setNonNeg("kcc_limit_inr_lakh", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1312,26 +1595,54 @@ export default function DataEntryWizard() {
                 <Field label="Availed any Government Scheme (Last 2 Years)" required><YesNo value={form.scheme_availed} onChange={(v) => set("scheme_availed", v)} /></Field>
                 {form.scheme_availed === "Yes" && (
                   <>
-                    <Field label="Name of Scheme" required error={errors.scheme_name} hint="Required because a Government Scheme was availed">
-                      {/* A native <datalist> is unreliable on Android Chrome (often
-                          renders no suggestions at all) — a plain text field plus
-                          tappable suggestion chips works consistently everywhere. */}
-                      <input className="gt-input" value={form.scheme_name} onChange={(e) => set("scheme_name", e.target.value)} placeholder={t("Type or pick a scheme below", lang)} />
+                    <Field label="Name of Scheme" required error={errors.scheme_name} hint="Required because a Government Scheme was availed — select all that apply">
+                      {/* CR-15: a farmer can be enrolled in more than one scheme, so
+                          this is a multi-select over the master list. A native
+                          <datalist> was found unreliable on Android Chrome (OBS-013),
+                          which is why this stays tappable chips rather than a
+                          dropdown — plus a free-text "other" entry for anything not
+                          yet in the master list. */}
                       {schemes.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {schemes.map((s) => {
+                            const selected = (form.scheme_name || []).includes(s);
+                            return (
+                              <button
+                                type="button"
+                                key={s}
+                                onClick={() => toggleMulti("scheme_name", s)}
+                                className={`text-[11px] px-2 py-1 rounded-full border whitespace-nowrap flex items-center gap-1 ${
+                                  selected
+                                    ? "gt-gradient text-white border-transparent"
+                                    : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+                                }`}
+                              >
+                                {selected && <CheckCircle2 size={11} />} {s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <input
+                        className="gt-input mt-1.5"
+                        value={schemeNameInput}
+                        onChange={(e) => setSchemeNameInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && schemeNameInput.trim()) {
+                            e.preventDefault();
+                            toggleMulti("scheme_name", schemeNameInput.trim());
+                            setSchemeNameInput("");
+                          }
+                        }}
+                        placeholder="Type a scheme not listed above, then press Enter"
+                      />
+                      {(form.scheme_name || []).filter((s: string) => !schemes.includes(s)).length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {schemes.map((s) => (
-                            <button
-                              type="button"
-                              key={s}
-                              onClick={() => set("scheme_name", s)}
-                              className={`text-[11px] px-2 py-1 rounded-full border whitespace-nowrap ${
-                                form.scheme_name === s
-                                  ? "gt-gradient text-white border-transparent"
-                                  : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
-                              }`}
-                            >
+                          {(form.scheme_name || []).filter((s: string) => !schemes.includes(s)).map((s: string) => (
+                            <span key={s} className="text-[11px] px-2 py-1 rounded-full gt-gradient text-white flex items-center gap-1">
                               {s}
-                            </button>
+                              <button type="button" onClick={() => toggleMulti("scheme_name", s)} className="font-bold">×</button>
+                            </span>
                           ))}
                         </div>
                       )}
@@ -1420,45 +1731,85 @@ export default function DataEntryWizard() {
             </div>
 
             <div className="mb-2">
-              <div className="font-semibold text-sm mb-1 text-[var(--gt-purple-dark)]">{t("Plot Boundary", lang)} <span className="text-[var(--gt-danger)]">*</span></div>
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-sm text-[var(--gt-purple-dark)]">{t("Plot / Land Records", lang)} <span className="text-[var(--gt-danger)]">*</span></div>
+                <button type="button" onClick={addPlot} className="text-sm text-[var(--gt-purple-dark)] font-medium">+ {t("Add Plot", lang)}</button>
+              </div>
               <p className="text-xs text-[var(--gt-text-muted)] mb-3">
-                {t("Map the exact plot boundary — draw it on the map, upload GPS points from Excel/CSV, or walk the boundary with the device GPS. This is required before the survey can be submitted; it can still be edited later from the farmer's record.", lang)}
+                {t("A farmer may hold more than one plot, including in different locations. Add one entry per plot — each needs a reported area; at least one across the whole set needs a GPS-measured boundary (draw on map, upload Excel/CSV, or walk with the device GPS). This is required before the survey can be submitted and can still be edited later from the farmer's record.", lang)}
               </p>
 
-              <div className="flex gap-2 overflow-x-auto pb-1 mb-3">
-                {PLOT_METHODS.map(({ key, label, icon: Icon }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => switchPlotMethod(key)}
-                    className={`shrink-0 flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-full border whitespace-nowrap transition-colors ${
-                      plotMethod === key
-                        ? "gt-gradient text-white border-transparent shadow-sm"
-                        : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
-                    }`}
-                  >
-                    <Icon size={15} /> {t(label, lang)}
-                  </button>
-                ))}
+              <div className="space-y-4">
+                {plots.map((plot) => {
+                  const area = areaInAcres(plot.points);
+                  const validation = validateBoundary(plot.points);
+                  const reported = parseFloat(plot.reportedArea) || 0;
+                  const diffPct = validation.valid && reported > 0 ? Math.abs(area - reported) / reported * 100 : null;
+                  return (
+                    <div key={plot.key} className="gt-card p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <input className="gt-input flex-1" value={plot.label} onChange={(e) => updatePlot(plot.key, { label: e.target.value })} placeholder={t("Plot label", lang)} />
+                        {plots.length > 1 && (
+                          <button type="button" onClick={() => removePlot(plot.key)} className="gt-input px-3 text-red-600 shrink-0">×</button>
+                        )}
+                      </div>
+                      <Field label="Reported Area (Acres)" required>
+                        <input type="number" min="0" step="0.01" className="gt-input" value={plot.reportedArea} onChange={(e) => updatePlot(plot.key, { reportedArea: e.target.value.replace(/^-+/, "") })} />
+                      </Field>
+
+                      <div className="flex gap-2 overflow-x-auto pb-1 mb-2 mt-2">
+                        {PLOT_METHODS.map(({ key, label, icon: Icon }) => (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => switchPlotMethod(plot.key, key)}
+                            className={`shrink-0 flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-full border whitespace-nowrap transition-colors ${
+                              plot.method === key
+                                ? "gt-gradient text-white border-transparent shadow-sm"
+                                : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+                            }`}
+                          >
+                            <Icon size={15} /> {t(label, lang)}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="gt-card p-3 flex items-center gap-4 text-sm mb-2 flex-wrap">
+                        <span><b>{plot.points.length}</b> {t("vertices", lang)}</span>
+                        <span className="text-[var(--gt-purple-dark)] font-semibold">{t("GPS-measured:", lang)} {formatArea(area, lang)}</span>
+                        <span className="text-[var(--gt-text-muted)]">{t("Reported:", lang)} {reported.toFixed(2)} {t("acres", lang)}</span>
+                        {diffPct !== null && (
+                          <span className={`text-xs font-medium ${diffPct > 10 ? "text-[var(--gt-danger)]" : "text-[var(--gt-success)]"}`}>
+                            {diffPct > 10 ? t("⚠ differs by", lang) : t("✓ matches within", lang)} {diffPct.toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="gt-card p-4">
+                        {plot.method === "draw" && <DrawMapTab points={plot.points} onChange={(pts) => updatePlot(plot.key, { points: pts })} />}
+                        {plot.method === "excel" && <ExcelUploadTab onParsed={(pts) => updatePlot(plot.key, { points: pts })} />}
+                        {plot.method === "gps" && <GpsCaptureTab points={plot.points} onChange={(pts) => updatePlot(plot.key, { points: pts })} />}
+                      </div>
+
+                      {plot.points.length > 0 && !validation.valid && (
+                        <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-xs rounded-lg px-3 py-2 mt-3">
+                          <AlertCircle size={14} /> {validation.error}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
-              <div className="gt-card p-3 flex items-center gap-4 text-sm mb-3">
-                <span><b>{plotPoints.length}</b> {t("vertices", lang)}</span>
-                <span className="text-[var(--gt-purple-dark)] font-semibold">{formatArea(plotArea, lang)}</span>
-                {form.areca_area_acres && plotPoints.length >= 3 && (
-                  <span className="text-xs text-[var(--gt-text-muted)]">{t("Declared areca area:", lang)} {form.areca_area_acres} {t("acres", lang)}</span>
-                )}
+              <div className="gt-card p-3 mt-3 bg-[#F1EBF7] border-none flex items-center gap-4 text-sm flex-wrap">
+                <span className="font-semibold text-[var(--gt-purple-dark)]">{t("Total across all plots:", lang)}</span>
+                <span>{t("Reported", lang)} <b>{totalReportedArea.toFixed(2)} {t("acres", lang)}</b></span>
+                <span>{t("GPS-Measured", lang)} <b>{totalGpsArea.toFixed(2)} {t("acres", lang)}</b></span>
               </div>
 
-              <div className="gt-card p-4">
-                {plotMethod === "draw" && <DrawMapTab points={plotPoints} onChange={setPlotPoints} />}
-                {plotMethod === "excel" && <ExcelUploadTab onParsed={setPlotPoints} />}
-                {plotMethod === "gps" && <GpsCaptureTab points={plotPoints} onChange={setPlotPoints} />}
-              </div>
-
-              {plotPoints.length > 0 && !plotValidation.valid && (
+              {!plotsValidation.valid && (
                 <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-xs rounded-lg px-3 py-2 mt-3">
-                  <AlertCircle size={14} /> {plotValidation.error}
+                  <AlertCircle size={14} /> {plotsValidation.error}
                 </div>
               )}
             </div>

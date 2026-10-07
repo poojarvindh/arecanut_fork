@@ -21,8 +21,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'Arecanut Farmer Survey',
-        short_name: 'Arecanut Survey',
+        name: 'Madhyastha',
+        short_name: 'Madhyastha',
         description: 'Karnataka arecanut farmer data collection — offline-capable field app',
         theme_color: '#5A2D82',
         background_color: '#F6F4F9',
