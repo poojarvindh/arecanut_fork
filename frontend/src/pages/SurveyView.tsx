@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Pencil, ArrowLeft, UserSearch, Handshake, MapPin, LandPlot, Wheat,
   Coins, Warehouse, TriangleAlert, Sprout, Wrench, Truck, Smartphone, CreditCard,
-  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2,
+  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2, History,
 } from "lucide-react";
 import { api } from "../api";
 import { useLang } from "../LangContext";
@@ -90,6 +90,9 @@ export default function SurveyView() {
           <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/plot-boundary`)}>
             <Map size={15} /> Plot Boundary
           </button>
+          <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/history`)}>
+            <History size={15} /> History
+          </button>
           <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry/farmer?id=${s.id}`)}>
             <Pencil size={15} /> Edit
           </button>
@@ -147,6 +150,7 @@ export default function SurveyView() {
           <Row label="Age" value={s.age} />
           <Row label="Father / Husband Name" value={s.guardian_name} />
           <Row label="Farmer Unique ID" value={s.farmer_id} />
+          <Row label="Survey Year / Season" value={s.survey_year} />
         </Section>
 
         <Section icon={Handshake} title="Society / FPC Linkage">

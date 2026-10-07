@@ -425,6 +425,7 @@ CONTAINS_FILTER_FIELDS = [
 @app.get("/api/surveys", response_model=list[SurveyOut])
 def list_surveys(
     q: Optional[str] = None,
+    farmer_id: Optional[str] = None,
     district: Optional[str] = None,
     taluka: Optional[str] = None,
     village: Optional[str] = None,
@@ -454,6 +455,8 @@ def list_surveys(
     user: m.User = Depends(require_permission("farmer_records")),
 ):
     query = db.query(m.FarmerSurvey)
+    if farmer_id:
+        query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
     local_vars = locals()
     for field in EXACT_FILTER_FIELDS:
         value = local_vars.get(field)
@@ -576,6 +579,8 @@ def create_survey(
     data["created_by_user_id"] = user.id
     if not data.get("farmer_id"):
         data["farmer_id"] = generate_farmer_id(db)
+    if not data.get("survey_year"):
+        data["survey_year"] = datetime.datetime.utcnow().year  # CR-18 — default to the year it was actually entered
     if data.get("plot_boundary"):
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     survey = m.FarmerSurvey(**data)

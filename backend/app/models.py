@@ -164,6 +164,14 @@ class FarmerSurvey(Base):
     age = Column(Integer, nullable=False)
     guardian_name = Column(String, nullable=True)
 
+    # CR-18: the agricultural year/season this survey reports on — distinct
+    # from entry_timestamp (when it was typed into the system). A farmer
+    # already gets a new row per survey (no uniqueness constraint on
+    # farmer_id — see the Session Log), so this is what the Farmer History
+    # view groups/sorts by, letting someone backfill or correct a past
+    # season's entry without it being mistaken for "this year".
+    survey_year = Column(Integer, nullable=True, index=True)
+
     # Module 1: Society / FPC Linkage
     society_assoc = Column(String, nullable=False)          # Yes/No
     society_name = Column(String, nullable=True)

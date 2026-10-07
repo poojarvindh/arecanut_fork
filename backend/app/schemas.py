@@ -183,6 +183,7 @@ class SurveyIn(BaseModel):
     gender: str = Field(..., max_length=20)
     age: int = Field(..., ge=18, le=80)
     guardian_name: Optional[str] = Field(None, max_length=STR_MAX)
+    survey_year: Optional[int] = Field(None, ge=1950, le=2100)  # CR-18
 
     society_assoc: str = Field(..., max_length=10)
     society_name: Optional[str] = Field(None, max_length=STR_MAX)
