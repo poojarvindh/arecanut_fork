@@ -1,4 +1,5 @@
 import re
+import json
 from collections import Counter
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
@@ -481,8 +482,17 @@ def get_survey(survey_id: int, db: Session = Depends(get_db), user: m.User = Dep
 def compute_income(payload: SurveyIn) -> float:
     includes_raw = payload.sale_type in ("Sold raw areca", "Sold both raw and processed areca")
     includes_processed = payload.sale_type in ("Sold processed areca", "Sold both raw and processed areca")
-    yield_qtl = (payload.yield_raw_qtl or 0 if includes_raw else 0) + (payload.yield_processed_qtl or 0 if includes_processed else 0)
-    gross = yield_qtl * payload.rate_inr_per_kg * 100
+    is_grading = includes_processed and payload.grading_done == "Yes"
+    gross = 0.0
+    if is_grading:
+        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket rate.
+        rows = json.loads(payload.grading_rows) if payload.grading_rows else []
+        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) * 100 for r in rows)
+        if includes_raw:
+            gross += (payload.yield_raw_qtl or 0) * (payload.rate_inr_per_kg or 0) * 100
+    else:
+        yield_qtl = (payload.yield_raw_qtl or 0 if includes_raw else 0) + (payload.yield_processed_qtl or 0 if includes_processed else 0)
+        gross = yield_qtl * (payload.rate_inr_per_kg or 0) * 100
     total = gross - payload.cultivation_cost_inr
     if includes_processed and payload.processing_cost_inr:
         total -= payload.processing_cost_inr

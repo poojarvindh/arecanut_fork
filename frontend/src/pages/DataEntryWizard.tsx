@@ -25,6 +25,7 @@ const PLOT_METHODS: { key: CaptureMethod; label: string; icon: any }[] = [
 ];
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const GRADE_VARIETIES = ["Rashi", "Api", "Bette", "Saraku", "Other"]; // CR-05
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 1950 + 1 }, (_, i) => CURRENT_YEAR - i);
 
@@ -51,6 +52,7 @@ const empty: any = {
   intercropping: "No", intercrop_crops: [], intercrop_crops_other: "", intercrop_area_acres: "",
   cultivation_cost_inr: "", yield_raw_qtl: "", yield_processed_qtl: "",
   sale_type: "Sold raw areca", processing_cost_inr: "", marketing_channel: "FPC/FPO", marketing_channel_detail: "",
+  grading_done: "No", grading_rows: [], // CR-05/CR-07
   rate_inr_per_kg: "", sale_month: "Jan",
   storage_duration_months: "", storage_source: "",
   storage_loan_availed: "No", storage_loan_amount_inr: "", storage_loan_interest_pct: "", storage_loan_repayment_months: "", storage_warehouse_receipt: "No",
@@ -168,12 +170,25 @@ function getErrors(form: any): Record<string, string> {
     else if (Number(form.yield_raw_qtl) <= 0) e.yield_raw_qtl = "Must be a positive value.";
     else if (hasMoreThanTwoDecimals(form.yield_raw_qtl)) e.yield_raw_qtl = "Maximum 2 decimal places.";
   }
-  if (form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") {
+  const includesProcessedSale = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+  const isGrading = includesProcessedSale && form.grading_done === "Yes"; // CR-05/CR-07
+  if (includesProcessedSale) {
     if (isBlank(form.processing_cost_inr)) e.processing_cost_inr = "Processing cost is required for a processed sale.";
     else if (hasMoreThanTwoDecimals(form.processing_cost_inr)) e.processing_cost_inr = "Maximum 2 decimal places."; // CR-06
     if (isBlank(form.yield_processed_qtl)) e.yield_processed_qtl = "Yield of processed nuts is required for a processed sale.";
     else if (Number(form.yield_processed_qtl) <= 0) e.yield_processed_qtl = "Must be a positive value.";
     else if (hasMoreThanTwoDecimals(form.yield_processed_qtl)) e.yield_processed_qtl = "Maximum 2 decimal places.";
+  }
+  if (isGrading) {
+    if (!form.grading_rows || form.grading_rows.length === 0) {
+      e.grading_rows = "Add at least one grade/variety row.";
+    } else {
+      for (const row of form.grading_rows) {
+        if (row.variety === "Other" && isBlank(row.variety_other)) { e.grading_rows = "Specify the variety for every 'Other' row."; break; }
+        if (isBlank(row.quantity_qtl) || Number(row.quantity_qtl) <= 0) { e.grading_rows = "Every row needs a quantity greater than 0."; break; }
+        if (isBlank(row.rate_inr_per_kg) || Number(row.rate_inr_per_kg) <= 0) { e.grading_rows = "Every row needs a rate greater than 0."; break; }
+      }
+    }
   }
   // CR-08: storage duration is whole months, no fractional months.
   if (!isBlank(form.storage_duration_months) && !isWholeNumber(form.storage_duration_months)) {
@@ -190,8 +205,10 @@ function getErrors(form: any): Record<string, string> {
     e.input_source_other = "Please specify the input source.";
   }
   if (isBlank(form.input_source)) e.input_source = "Select at least one input source."; // CR-14
-  if (isBlank(form.rate_inr_per_kg)) e.rate_inr_per_kg = "Rate realised is required.";
-  else if (Number(form.rate_inr_per_kg) <= 0) e.rate_inr_per_kg = "Must be greater than 0.";
+  if (!isGrading) { // CR-07: a graded sale uses per-row rates instead of one blanket rate
+    if (isBlank(form.rate_inr_per_kg)) e.rate_inr_per_kg = "Rate realised is required.";
+    else if (Number(form.rate_inr_per_kg) <= 0) e.rate_inr_per_kg = "Must be greater than 0.";
+  }
   // Name of FPC/FPO is optional (not every enumerator will know the exact FPC at
   // time of entry) — Cooperative Society / APMC / Any Other are still required.
   if (["Cooperative Society", "APMC", "Any Other"].includes(form.marketing_channel) && isBlank(form.marketing_channel_detail)) {
@@ -507,6 +524,7 @@ export default function DataEntryWizard() {
           input_source: s.input_source ? s.input_source.split(",") : [], // CR-14
           input_challenges: s.input_challenges ? s.input_challenges.split(",") : [], // CR-14
           scheme_name: s.scheme_name ? s.scheme_name.split(",") : [], // CR-15
+          grading_rows: s.grading_rows ? JSON.parse(s.grading_rows) : [], // CR-05
         });
         if (s.plot_boundary) {
           try {
@@ -540,6 +558,19 @@ export default function DataEntryWizard() {
     clearError(k);
   };
 
+  // CR-05: dynamic grading/variety table for processed areca sales.
+  const addGradingRow = () => {
+    setForm((f: any) => ({ ...f, grading_rows: [...f.grading_rows, { variety: "Rashi", variety_other: "", quantity_qtl: "", rate_inr_per_kg: "" }] }));
+    clearError("grading_rows");
+  };
+  const removeGradingRow = (idx: number) => {
+    setForm((f: any) => ({ ...f, grading_rows: f.grading_rows.filter((_: any, i: number) => i !== idx) }));
+  };
+  const updateGradingRow = (idx: number, key: string, value: string) => {
+    setForm((f: any) => ({ ...f, grading_rows: f.grading_rows.map((r: any, i: number) => (i === idx ? { ...r, [key]: value } : r)) }));
+    clearError("grading_rows");
+  };
+
   // No SMS gateway is wired up yet (needs a provider — Twilio/MSG91/etc. — and
   // credentials from the client), so this simulates the OTP round trip client-side
   // rather than actually texting the farmer. Swap sendOtp/verifyOtp for real API
@@ -560,12 +591,19 @@ export default function DataEntryWizard() {
   const computedIncome = useMemo(() => {
     const includesRaw = form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca";
     const includesProcessed = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
-    const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
-    const r = parseFloat(form.rate_inr_per_kg) || 0;
+    const isGrading = includesProcessed && form.grading_done === "Yes"; // CR-05/CR-07
     const c = parseFloat(form.cultivation_cost_inr) || 0;
     const p = includesProcessed ? (parseFloat(form.processing_cost_inr) || 0) : 0;
-    return Math.round(y * r * 100 - c - p);
-  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.cultivation_cost_inr, form.processing_cost_inr, form.sale_type]);
+    let gross = 0;
+    if (isGrading) {
+      gross += (form.grading_rows || []).reduce((sum: number, row: any) => sum + (parseFloat(row.quantity_qtl) || 0) * (parseFloat(row.rate_inr_per_kg) || 0) * 100, 0);
+      if (includesRaw) gross += (parseFloat(form.yield_raw_qtl) || 0) * (parseFloat(form.rate_inr_per_kg) || 0) * 100;
+    } else {
+      const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
+      gross = y * (parseFloat(form.rate_inr_per_kg) || 0) * 100;
+    }
+    return Math.round(gross - c - p);
+  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.cultivation_cost_inr, form.processing_cost_inr, form.sale_type, form.grading_done, form.grading_rows]);
 
   // Cultivation cost is captured a whole step before yield/rate, so the income
   // preview would otherwise flash a large negative number (just -cost) the
@@ -575,10 +613,14 @@ export default function DataEntryWizard() {
   const hasIncomeInputs = useMemo(() => {
     const includesRaw = form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca";
     const includesProcessed = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+    const isGrading = includesProcessed && form.grading_done === "Yes"; // CR-05/CR-07
+    if (isGrading) {
+      return (form.grading_rows || []).some((row: any) => (parseFloat(row.quantity_qtl) || 0) > 0 && (parseFloat(row.rate_inr_per_kg) || 0) > 0);
+    }
     const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
     const r = parseFloat(form.rate_inr_per_kg) || 0;
     return y > 0 && r > 0;
-  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.sale_type]);
+  }, [form.yield_raw_qtl, form.yield_processed_qtl, form.rate_inr_per_kg, form.sale_type, form.grading_done, form.grading_rows]);
 
   const doLookup = async () => {
     setLookupMsg(null);
@@ -703,6 +745,8 @@ export default function DataEntryWizard() {
     }
 
     setSubmitting(true);
+    const includesProcessedNow = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+    const isGradingNow = includesProcessedNow && form.grading_done === "Yes"; // CR-05/CR-07
     const payload = {
       ...form,
       age: parseInt(form.age) || 0,
@@ -718,7 +762,16 @@ export default function DataEntryWizard() {
       yield_raw_qtl: (form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca") ? (parseFloat(form.yield_raw_qtl) || 0) : null,
       yield_processed_qtl: (form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") ? (parseFloat(form.yield_processed_qtl) || 0) : null,
       processing_cost_inr: form.processing_cost_inr ? parseFloat(form.processing_cost_inr) : null,
-      rate_inr_per_kg: parseFloat(form.rate_inr_per_kg) || 0,
+      grading_done: includesProcessedNow ? form.grading_done : null, // CR-05
+      grading_rows: isGradingNow // CR-05
+        ? JSON.stringify(form.grading_rows.map((r: any) => ({
+            variety: r.variety, variety_other: r.variety === "Other" ? r.variety_other : "",
+            quantity_qtl: parseFloat(r.quantity_qtl) || 0, rate_inr_per_kg: parseFloat(r.rate_inr_per_kg) || 0,
+          })))
+        : null,
+      rate_inr_per_kg: isGradingNow
+        ? (form.sale_type === "Sold both raw and processed areca" ? (parseFloat(form.rate_inr_per_kg) || 0) : null) // only the raw portion (if any) still needs a blanket rate
+        : (parseFloat(form.rate_inr_per_kg) || 0), // CR-07
       storage_duration_months: form.storage_duration_months ? parseFloat(form.storage_duration_months) : null,
       storage_loan_amount_inr: form.storage_loan_amount_inr ? parseFloat(form.storage_loan_amount_inr) : null,
       storage_loan_interest_pct: form.storage_loan_interest_pct ? parseFloat(form.storage_loan_interest_pct) : null,
@@ -1167,7 +1220,47 @@ export default function DataEntryWizard() {
                     <input className="gt-input" value={form.marketing_channel_detail} onChange={(e) => set("marketing_channel_detail", e.target.value)} />
                   </Field>
                 )}
-                <Field label="Rate Realised (INR/kg)" required error={errors.rate_inr_per_kg}><input type="number" className="gt-input" value={form.rate_inr_per_kg} onChange={(e) => setNonNeg("rate_inr_per_kg", e.target.value)} /></Field>
+                {(form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") && (
+                  <Field label="Does the farmer grade/sort the processed produce?" required hint="CR-05: graded produce is priced per variety, not at one blanket rate.">
+                    <select className="gt-input" value={form.grading_done} onChange={(e) => set("grading_done", e.target.value)}>
+                      <option value="No">{t("No", lang)}</option>
+                      <option value="Yes">{t("Yes", lang)}</option>
+                    </select>
+                  </Field>
+                )}
+                {!(form.sale_type === "Sold processed areca" && form.grading_done === "Yes") && (
+                  // CR-07: hidden when the farmer grades/sorts — each row below carries its own rate instead.
+                  <Field label="Rate Realised (INR/kg)" required error={errors.rate_inr_per_kg}><input type="number" className="gt-input" value={form.rate_inr_per_kg} onChange={(e) => setNonNeg("rate_inr_per_kg", e.target.value)} /></Field>
+                )}
+                {form.sale_type === "Sold processed areca" && form.grading_done === "Yes" && (
+                  <div className="md:col-span-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-[var(--gt-text)]">{t("Grade / Variety-wise Sales", lang)} *</label>
+                      <button type="button" onClick={addGradingRow} className="text-sm text-[var(--gt-purple-dark)] font-medium">+ {t("Add Row", lang)}</button>
+                    </div>
+                    {errors.grading_rows && <div className="text-xs text-red-600 mb-2">{errors.grading_rows}</div>}
+                    <div className="space-y-2">
+                      {(form.grading_rows || []).map((row: any, idx: number) => (
+                        <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-start">
+                          <div>
+                            <select className="gt-input" value={row.variety} onChange={(e) => updateGradingRow(idx, "variety", e.target.value)}>
+                              {GRADE_VARIETIES.map((v) => <option key={v} value={v}>{t(v, lang)}</option>)}
+                            </select>
+                            {row.variety === "Other" && (
+                              <input className="gt-input mt-1" placeholder={t("Specify variety", lang)} value={row.variety_other} onChange={(e) => updateGradingRow(idx, "variety_other", e.target.value)} />
+                            )}
+                          </div>
+                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Quantity (Qtl)", lang)} value={row.quantity_qtl} onChange={(e) => updateGradingRow(idx, "quantity_qtl", e.target.value.replace(/^-+/, ""))} />
+                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Rate (INR/kg)", lang)} value={row.rate_inr_per_kg} onChange={(e) => updateGradingRow(idx, "rate_inr_per_kg", e.target.value.replace(/^-+/, ""))} />
+                          <button type="button" onClick={() => removeGradingRow(idx)} className="gt-input px-3 text-red-600">×</button>
+                        </div>
+                      ))}
+                      {(form.grading_rows || []).length === 0 && (
+                        <div className="text-sm text-[var(--gt-text-muted)]">{t("No rows yet — add at least one grade/variety.", lang)}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <Field label="Month of Sale" required>
                   <select className="gt-input" value={form.sale_month} onChange={(e) => set("sale_month", e.target.value)}>
                     {MONTHS.map((mo) => <option key={mo} value={mo}>{t(mo, lang)}</option>)}

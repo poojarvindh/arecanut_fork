@@ -198,9 +198,11 @@ class FarmerSurvey(Base):
     # Module 5: Sales, Marketing & Income
     sale_type = Column(String, nullable=False)
     processing_cost_inr = Column(Float, nullable=True)
+    grading_done = Column(String, nullable=True)  # "Yes"/"No" — only asked when sale_type includes processed (CR-05)
+    grading_rows = Column(Text, nullable=True)  # JSON array of {variety, variety_other, quantity_qtl, rate_inr_per_kg} (CR-05)
     marketing_channel = Column(String, nullable=False)
     marketing_channel_detail = Column(String, nullable=True)  # name, if Cooperative Society / APMC
-    rate_inr_per_kg = Column(Float, nullable=False)
+    rate_inr_per_kg = Column(Float, nullable=True)  # not required when grading (CR-07) — required check moved to app validation
     total_income_inr = Column(Float, nullable=False)        # auto-calculated
     sale_month = Column(String, nullable=False)
 

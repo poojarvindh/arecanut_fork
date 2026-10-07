@@ -184,9 +184,11 @@ class SurveyIn(BaseModel):
 
     sale_type: str = Field(..., max_length=50)
     processing_cost_inr: Optional[float] = Field(None, ge=0, le=100_000_000)  # capped at INR 10 crore
+    grading_done: Optional[str] = Field(None, max_length=10)  # "Yes"/"No" — only asked for processed sales (CR-05)
+    grading_rows: Optional[str] = Field(None, max_length=TEXT_MAX)  # JSON array of grade/variety rows (CR-05)
     marketing_channel: str = Field(..., max_length=STR_MAX)
     marketing_channel_detail: Optional[str] = Field(None, max_length=STR_MAX)
-    rate_inr_per_kg: float = Field(..., ge=0, le=1_000_000)
+    rate_inr_per_kg: Optional[float] = Field(None, ge=0, le=1_000_000)  # not required when grading (CR-07)
     sale_month: str = Field(..., max_length=20)
 
     storage_duration_months: Optional[float] = Field(None, ge=0, le=1200)
@@ -346,6 +348,26 @@ class SurveyIn(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def grading_rows_required_when_grading(self):
+        # CR-05/CR-07: grading is only offered for processed sales; when the farmer
+        # grades/sorts, per-row rates replace the single top-level Rate Realised field.
+        is_processed = self.sale_type in ("Sold processed areca", "Sold both raw and processed areca")
+        is_grading = is_processed and self.grading_done == "Yes"
+        if is_grading:
+            try:
+                rows = json.loads(self.grading_rows) if self.grading_rows else []
+            except (ValueError, TypeError):
+                raise ValueError("grading_rows must be a valid JSON array")
+            if not isinstance(rows, list) or len(rows) == 0:
+                raise ValueError("at least one grading row is required when grading_done = Yes")
+            for row in rows:
+                if not isinstance(row, dict) or not row.get("variety") or row.get("quantity_qtl") is None or row.get("rate_inr_per_kg") is None:
+                    raise ValueError("each grading row needs variety, quantity_qtl and rate_inr_per_kg")
+        elif self.rate_inr_per_kg is None:
+            raise ValueError("rate_inr_per_kg is required unless the farmer grades/sorts processed produce")
+        return self
+
+    @model_validator(mode="after")
     def areca_area_within_land(self):
         total_land = (self.land_own_acres or 0) + (self.land_leased_acres or 0)
         if self.areca_area_acres > total_land:
@@ -386,6 +408,10 @@ class SurveyOut(SurveyIn):
 
     @model_validator(mode="after")
     def yield_matches_sale_type(self):
+        return self
+
+    @model_validator(mode="after")
+    def grading_rows_required_when_grading(self):
         return self
 
     # Same input-only reasoning as above: a content-shape rule (must contain
