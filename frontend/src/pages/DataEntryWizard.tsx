@@ -64,10 +64,10 @@ const empty: any = {
   bank_account: "No", overdraft_facility: "No", overdraft_limit_inr_lakh: "",
   credit_linkage: "No", credit_source: "", credit_source_other: "", credit_amount_inr: "", credit_interest_rate_pct: "", credit_repayment_months: "",
   credit_outstanding_inr_lakh: "", loan_application_outcome: "", loan_rejection_reason: "", loan_rejection_reason_other: "", credit_gap_inr_lakh: "",
-  scheme_availed: "No", scheme_name: "", scheme_benefits: "",
+  scheme_availed: "No", scheme_name: [], scheme_benefits: "",
   irrigation_source: [], irrigation_challenges: "",
   soil_test_done: "No", crop_insurance: "No", crop_insurance_detail: "", natural_calamity_5yr: "No",
-  input_source: "Cooperative Society", input_source_other: "", input_distance_km: "", input_challenges: "", input_challenges_other: "", input_purchase_delay_days: "",
+  input_source: ["Cooperative Society"], input_source_other: "", input_distance_km: "", input_challenges: [], input_challenges_other: "", input_purchase_delay_days: "",
   tech_adoption: "No", tech_adoption_detail: "",
   kcc_account: "No", kcc_limit_inr_lakh: "",
   geo_lat: "", geo_long: "", field_photo: "",
@@ -101,6 +101,15 @@ function isBlank(v: any) {
 function hasMoreThanTwoDecimals(v: any) {
   const n = Number(v);
   return !isNaN(n) && Math.round(n * 100) !== n * 100;
+}
+
+// Generalized version of the above — CR-10 needed a 1-decimal-place limit
+// (Distance of Input Source) alongside the existing 2-decimal-place fields,
+// so this replaces hardcoding 100 everywhere a new precision is needed.
+function hasMoreThanNDecimals(v: any, n: number) {
+  const num = Number(v);
+  const factor = Math.pow(10, n);
+  return !isNaN(num) && Math.round(num * factor) !== num * factor;
 }
 
 function isWholeNumber(v: any) {
@@ -161,16 +170,26 @@ function getErrors(form: any): Record<string, string> {
   }
   if (form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") {
     if (isBlank(form.processing_cost_inr)) e.processing_cost_inr = "Processing cost is required for a processed sale.";
+    else if (hasMoreThanTwoDecimals(form.processing_cost_inr)) e.processing_cost_inr = "Maximum 2 decimal places."; // CR-06
     if (isBlank(form.yield_processed_qtl)) e.yield_processed_qtl = "Yield of processed nuts is required for a processed sale.";
     else if (Number(form.yield_processed_qtl) <= 0) e.yield_processed_qtl = "Must be a positive value.";
     else if (hasMoreThanTwoDecimals(form.yield_processed_qtl)) e.yield_processed_qtl = "Maximum 2 decimal places.";
   }
-  if (form.input_challenges === "Other" && isBlank(form.input_challenges_other)) {
+  // CR-08: storage duration is whole months, no fractional months.
+  if (!isBlank(form.storage_duration_months) && !isWholeNumber(form.storage_duration_months)) {
+    e.storage_duration_months = "Whole numbers only — no decimals.";
+  }
+  // CR-09: per-provider logistics cost to 2 decimal places.
+  if (!isBlank(form.logistics_cost_inr_per_qtl) && hasMoreThanTwoDecimals(form.logistics_cost_inr_per_qtl)) {
+    e.logistics_cost_inr_per_qtl = "Maximum 2 decimal places.";
+  }
+  if (form.input_challenges?.includes("Other") && isBlank(form.input_challenges_other)) {
     e.input_challenges_other = "Please specify the challenge.";
   }
-  if (form.input_source === "Other" && isBlank(form.input_source_other)) {
+  if (form.input_source?.includes("Other") && isBlank(form.input_source_other)) {
     e.input_source_other = "Please specify the input source.";
   }
+  if (isBlank(form.input_source)) e.input_source = "Select at least one input source."; // CR-14
   if (isBlank(form.rate_inr_per_kg)) e.rate_inr_per_kg = "Rate realised is required.";
   else if (Number(form.rate_inr_per_kg) <= 0) e.rate_inr_per_kg = "Must be greater than 0.";
   // Name of FPC/FPO is optional (not every enumerator will know the exact FPC at
@@ -213,8 +232,14 @@ function getErrors(form: any): Record<string, string> {
     if (isBlank(form.mech_loan_amount_inr_lakh)) e.mech_loan_amount_inr_lakh = "Loan amount is required.";
     if (isBlank(form.mech_loan_interest_pct)) e.mech_loan_interest_pct = "Interest rate is required.";
   }
-  if (form.input_challenges === "Availability" && isBlank(form.input_purchase_delay_days)) {
+  if (form.input_challenges?.includes("Availability") && isBlank(form.input_purchase_delay_days)) {
     e.input_purchase_delay_days = "Average delay in receiving inputs is required.";
+  } else if (!isBlank(form.input_purchase_delay_days) && !isWholeNumber(form.input_purchase_delay_days)) {
+    e.input_purchase_delay_days = "Whole numbers only — no decimals."; // CR-12
+  }
+  // CR-10: distance of input source to 1 decimal place.
+  if (!isBlank(form.input_distance_km) && hasMoreThanNDecimals(form.input_distance_km, 1)) {
+    e.input_distance_km = "Maximum 1 decimal place.";
   }
   if (form.tech_adoption === "Yes") {
     if (isBlank(form.tech_adoption_detail)) e.tech_adoption_detail = "Please describe the technology used.";
@@ -226,9 +251,12 @@ function getErrors(form: any): Record<string, string> {
     if (isBlank(form.credit_source)) e.credit_source = "Credit source is required.";
     if (form.credit_source === "Other" && isBlank(form.credit_source_other)) e.credit_source_other = "Please specify the credit source.";
     if (isBlank(form.credit_amount_inr)) e.credit_amount_inr = "Loan amount is required.";
+    else if (hasMoreThanTwoDecimals(form.credit_amount_inr)) e.credit_amount_inr = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Interest rate is required.";
     else if (Number(form.credit_interest_rate_pct) < 0 || Number(form.credit_interest_rate_pct) > 20) e.credit_interest_rate_pct = "Enter a value between 0 and 20.";
+    else if (hasMoreThanTwoDecimals(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_repayment_months)) e.credit_repayment_months = "Repayment period is required.";
+    else if (!isWholeNumber(form.credit_repayment_months)) e.credit_repayment_months = "Whole numbers only — no decimals."; // CR-11
   } else if (form.credit_linkage === "No") {
     if (isBlank(form.loan_application_outcome)) e.loan_application_outcome = "Please select the outcome of any previous loan application.";
     if (form.loan_application_outcome === "Rejected" && isBlank(form.loan_rejection_reason)) e.loan_rejection_reason = "Please select a reason for rejection.";
@@ -237,11 +265,21 @@ function getErrors(form: any): Record<string, string> {
     }
   }
   if (form.bank_account === "Yes" && form.overdraft_facility === "Yes" && isBlank(form.overdraft_limit_inr_lakh)) e.overdraft_limit_inr_lakh = "Overdraft limit is required.";
+  else if (!isBlank(form.overdraft_limit_inr_lakh) && hasMoreThanTwoDecimals(form.overdraft_limit_inr_lakh)) e.overdraft_limit_inr_lakh = "Maximum 2 decimal places."; // CR-16
   if (isBlank(form.total_household_income_bracket)) e.total_household_income_bracket = "Please select a household income bracket.";
   if (form.non_farm_income_source?.includes("Other") && isBlank(form.non_farm_income_source_other)) {
     e.non_farm_income_source_other = "Please specify the income source.";
   }
   if (form.kcc_account === "Yes" && isBlank(form.kcc_limit_inr_lakh)) e.kcc_limit_inr_lakh = "KCC limit is required.";
+  else if (!isBlank(form.kcc_limit_inr_lakh) && hasMoreThanTwoDecimals(form.kcc_limit_inr_lakh)) e.kcc_limit_inr_lakh = "Maximum 2 decimal places."; // CR-01
+  // CR-01: Current Outstanding Loan Amount and Credit Gap are always-optional
+  // fields (no "required" state to chain onto), so these checks stand alone.
+  if (!isBlank(form.credit_outstanding_inr_lakh) && hasMoreThanTwoDecimals(form.credit_outstanding_inr_lakh)) {
+    e.credit_outstanding_inr_lakh = "Maximum 2 decimal places.";
+  }
+  if (!isBlank(form.credit_gap_inr_lakh) && hasMoreThanTwoDecimals(form.credit_gap_inr_lakh)) {
+    e.credit_gap_inr_lakh = "Maximum 2 decimal places.";
+  }
   if (form.scheme_availed === "Yes") {
     if (isBlank(form.scheme_name)) e.scheme_name = "Scheme name is required.";
     if (isBlank(form.scheme_benefits)) e.scheme_benefits = "Describe the benefits received.";
@@ -377,6 +415,7 @@ export default function DataEntryWizard() {
   const [opts, setOpts] = useState<Record<string, string[]>>({});
   const { lang } = useLang();
   const [otpStatus, setOtpStatus] = useState<"idle" | "sent" | "verifying">("idle");
+  const [schemeNameInput, setSchemeNameInput] = useState(""); // CR-15: free-text entry for a scheme not in the master list
   const [otpCode, setOtpCode] = useState("");
   // Once a village is picked it locks — accidental edits/deletes are the exact
   // failure mode the client called out. "Change Village" is still possible but
@@ -437,6 +476,9 @@ export default function DataEntryWizard() {
           irrigation_source: s.irrigation_source ? s.irrigation_source.split(",") : [],
           intercrop_crops: s.intercrop_crops ? s.intercrop_crops.split(",") : [],
           non_farm_income_source: s.non_farm_income_source ? s.non_farm_income_source.split(",") : [],
+          input_source: s.input_source ? s.input_source.split(",") : [], // CR-14
+          input_challenges: s.input_challenges ? s.input_challenges.split(",") : [], // CR-14
+          scheme_name: s.scheme_name ? s.scheme_name.split(",") : [], // CR-15
         });
         if (s.plot_boundary) {
           try {
@@ -677,8 +719,11 @@ export default function DataEntryWizard() {
       credit_gap_inr_lakh: form.credit_gap_inr_lakh ? parseFloat(form.credit_gap_inr_lakh) : null,
       kcc_limit_inr_lakh: form.kcc_limit_inr_lakh ? parseFloat(form.kcc_limit_inr_lakh) : null,
       irrigation_source: form.irrigation_source.join(","),
+      input_source: (form.input_source || []).join(","), // CR-14
+      input_challenges: (form.input_challenges || []).join(","), // CR-14
       input_distance_km: form.input_distance_km ? parseFloat(form.input_distance_km) : null,
       input_purchase_delay_days: form.input_purchase_delay_days ? parseInt(form.input_purchase_delay_days) : null,
+      scheme_name: (form.scheme_name || []).join(","), // CR-15
       geo_lat: form.geo_lat ? parseFloat(form.geo_lat) : null,
       geo_long: form.geo_long ? parseFloat(form.geo_long) : null,
       plot_boundary: plotValidation.valid ? JSON.stringify(plotPoints) : null,
@@ -1014,7 +1059,7 @@ export default function DataEntryWizard() {
             <SubSection icon={Coins} title="Sales, Marketing & Income" first>
               <div className="grid md:grid-cols-2 gap-x-4">
                 {(form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca") && (
-                  <Field label="Total Processing Cost (INR)" required error={errors.processing_cost_inr} hint="Required for Sale Type = Processed or Both"><input max="100000000" type="number" className="gt-input" value={form.processing_cost_inr} onChange={(e) => setNonNeg("processing_cost_inr", e.target.value)} /></Field>
+                  <Field label="Total Processing Cost (INR)" required error={errors.processing_cost_inr} hint="Required for Sale Type = Processed or Both"><input max="100000000" step="0.01" type="number" className="gt-input" value={form.processing_cost_inr} onChange={(e) => setNonNeg("processing_cost_inr", e.target.value)} /></Field>
                 )}
                 <Field label="Marketing Channel" required>
                   <select className="gt-input" value={form.marketing_channel} onChange={(e) => set("marketing_channel", e.target.value)}>
@@ -1059,7 +1104,7 @@ export default function DataEntryWizard() {
 
             <SubSection icon={Warehouse} title="Storage & Logistics">
               <div className="grid md:grid-cols-2 gap-x-4">
-                <Field label="Areca Stored - Duration (Months)"><input type="number" className="gt-input" value={form.storage_duration_months} onChange={(e) => setNonNeg("storage_duration_months", e.target.value)} /></Field>
+                <Field label="Areca Stored - Duration (Months)" error={errors.storage_duration_months}><input type="number" step="1" className="gt-input" value={form.storage_duration_months} onChange={(e) => setNonNeg("storage_duration_months", e.target.value)} /></Field>
                 <Field label="Storage Source">
                   <select className="gt-input" value={form.storage_source} onChange={(e) => set("storage_source", e.target.value)}>
                     <option value="">{t("Select", lang)}</option>
@@ -1094,7 +1139,7 @@ export default function DataEntryWizard() {
                   </Field>
                 )}
                 {form.logistics_provider && (
-                  <Field label="Provider-wise Cost (INR/Qtl)"><input type="number" className="gt-input" value={form.logistics_cost_inr_per_qtl} onChange={(e) => setNonNeg("logistics_cost_inr_per_qtl", e.target.value)} /></Field>
+                  <Field label="Provider-wise Cost (INR/Qtl)" error={errors.logistics_cost_inr_per_qtl}><input type="number" step="0.01" className="gt-input" value={form.logistics_cost_inr_per_qtl} onChange={(e) => setNonNeg("logistics_cost_inr_per_qtl", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1185,31 +1230,29 @@ export default function DataEntryWizard() {
 
             <SubSection icon={Truck} title="Input Supply Chain">
               <div className="grid md:grid-cols-2 gap-x-4">
-                <Field label="Source of Input Purchase" required>
-                  <select className="gt-input" value={form.input_source} onChange={(e) => set("input_source", e.target.value)}>
-                    {(opts.input_source || []).map((o) => <option key={o} value={o}>{t(o, lang)}</option>)}
-                  </select>
+                <Field label="Source of Input Purchase" required error={errors.input_source}>
+                  {/* CR-14: multiple input sources can apply (e.g. both a Cooperative
+                      Society and a Local Input Shop), so this is multi-select. */}
+                  <MultiChip options={opts.input_source || []} value={form.input_source || []} onToggle={(v) => toggleMulti("input_source", v)} />
                 </Field>
-                {form.input_source === "Other" && (
+                {form.input_source?.includes("Other") && (
                   <Field label="Specify Input Source" required error={errors.input_source_other} hint="Required because 'Other' input source is selected">
                     <input className="gt-input" value={form.input_source_other} onChange={(e) => set("input_source_other", e.target.value)} />
                   </Field>
                 )}
-                <Field label="Distance of Input Source (Km)" error={errors.input_distance_km}><input type="number" min="0" className="gt-input" value={form.input_distance_km} onChange={(e) => setNonNeg("input_distance_km", e.target.value)} /></Field>
+                <Field label="Distance of Input Source (Km)" error={errors.input_distance_km}><input type="number" min="0" step="0.1" className="gt-input" value={form.input_distance_km} onChange={(e) => setNonNeg("input_distance_km", e.target.value)} /></Field>
                 <Field label="Challenges in Input Purchase">
-                  <select className="gt-input" value={form.input_challenges} onChange={(e) => set("input_challenges", e.target.value)}>
-                    <option value="">{t("Select", lang)}</option>
-                    {(opts.input_challenges || []).map((o) => <option key={o} value={o}>{t(o, lang)}</option>)}
-                  </select>
+                  {/* CR-14: multi-select — a farmer can face more than one challenge. */}
+                  <MultiChip options={opts.input_challenges || []} value={form.input_challenges || []} onToggle={(v) => toggleMulti("input_challenges", v)} />
                 </Field>
-                {form.input_challenges === "Other" && (
+                {form.input_challenges?.includes("Other") && (
                   <Field label="Specify Challenge" required error={errors.input_challenges_other} hint="Required because 'Other' challenge is selected">
                     <input className="gt-input" value={form.input_challenges_other} onChange={(e) => set("input_challenges_other", e.target.value)} />
                   </Field>
                 )}
-                {form.input_challenges === "Availability" && (
+                {form.input_challenges?.includes("Availability") && (
                   <Field label="Average Delay in Receiving Inputs (Days)" required error={errors.input_purchase_delay_days} hint="Required because 'Availability' is selected as a challenge">
-                    <input type="number" min="0" className="gt-input" value={form.input_purchase_delay_days} onChange={(e) => setNonNeg("input_purchase_delay_days", e.target.value)} />
+                    <input type="number" min="0" step="1" className="gt-input" value={form.input_purchase_delay_days} onChange={(e) => setNonNeg("input_purchase_delay_days", e.target.value)} />
                   </Field>
                 )}
               </div>
@@ -1252,7 +1295,7 @@ export default function DataEntryWizard() {
                   <Field label="Overdraft Facility Available?" required><YesNo value={form.overdraft_facility} onChange={(v) => set("overdraft_facility", v)} /></Field>
                 )}
                 {form.bank_account === "Yes" && form.overdraft_facility === "Yes" && (
-                  <Field label="Overdraft Limit (INR Lakh)" required error={errors.overdraft_limit_inr_lakh} hint="Required because Overdraft Facility = Yes"><input max="1000" type="number" className="gt-input" value={form.overdraft_limit_inr_lakh} onChange={(e) => setNonNeg("overdraft_limit_inr_lakh", e.target.value)} /></Field>
+                  <Field label="Overdraft Limit (INR Lakh)" required error={errors.overdraft_limit_inr_lakh} hint="Required because Overdraft Facility = Yes"><input max="1000" step="0.01" type="number" className="gt-input" value={form.overdraft_limit_inr_lakh} onChange={(e) => setNonNeg("overdraft_limit_inr_lakh", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1273,10 +1316,10 @@ export default function DataEntryWizard() {
                         <input className="gt-input" value={form.credit_source_other} onChange={(e) => set("credit_source_other", e.target.value)} />
                       </Field>
                     )}
-                    <Field label="Amount (INR)" required error={errors.credit_amount_inr} hint="Required because Credit Linkage = Yes"><input max="100000000" type="number" className="gt-input" value={form.credit_amount_inr} onChange={(e) => setNonNeg("credit_amount_inr", e.target.value)} /></Field>
-                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="20" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
-                    <Field label="Repayment Period (Months)" required error={errors.credit_repayment_months} hint="Required because Credit Linkage = Yes"><input type="number" className="gt-input" value={form.credit_repayment_months} onChange={(e) => setNonNeg("credit_repayment_months", e.target.value)} /></Field>
-                    <Field label="Current Outstanding Loan Amount (INR Lakh)"><input max="1000" type="number" className="gt-input" value={form.credit_outstanding_inr_lakh} onChange={(e) => setNonNeg("credit_outstanding_inr_lakh", e.target.value)} /></Field>
+                    <Field label="Amount (INR)" required error={errors.credit_amount_inr} hint="Required because Credit Linkage = Yes"><input max="100000000" step="0.01" type="number" className="gt-input" value={form.credit_amount_inr} onChange={(e) => setNonNeg("credit_amount_inr", e.target.value)} /></Field>
+                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="20" step="0.01" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
+                    <Field label="Repayment Period (Months)" required error={errors.credit_repayment_months} hint="Required because Credit Linkage = Yes"><input type="number" step="1" className="gt-input" value={form.credit_repayment_months} onChange={(e) => setNonNeg("credit_repayment_months", e.target.value)} /></Field>
+                    <Field label="Current Outstanding Loan Amount (INR Lakh)" error={errors.credit_outstanding_inr_lakh}><input max="1000" step="0.01" type="number" className="gt-input" value={form.credit_outstanding_inr_lakh} onChange={(e) => setNonNeg("credit_outstanding_inr_lakh", e.target.value)} /></Field>
                   </>
                 )}
                 {form.credit_linkage === "No" && (
@@ -1302,10 +1345,10 @@ export default function DataEntryWizard() {
                     )}
                   </>
                 )}
-                <Field label="Gap Between Required Credit and Credit Availed (INR Lakh)"><input max="1000" type="number" className="gt-input" value={form.credit_gap_inr_lakh} onChange={(e) => setNonNeg("credit_gap_inr_lakh", e.target.value)} /></Field>
+                <Field label="Gap Between Required Credit and Credit Availed (INR Lakh)" error={errors.credit_gap_inr_lakh}><input max="1000" step="0.01" type="number" className="gt-input" value={form.credit_gap_inr_lakh} onChange={(e) => setNonNeg("credit_gap_inr_lakh", e.target.value)} /></Field>
                 <Field label="Do You Have a KCC Account?" required><YesNo value={form.kcc_account} onChange={(v) => set("kcc_account", v)} /></Field>
                 {form.kcc_account === "Yes" && (
-                  <Field label="KCC Limit (INR Lakh)" required error={errors.kcc_limit_inr_lakh} hint="Required because you have a KCC Account"><input max="1000" type="number" className="gt-input" value={form.kcc_limit_inr_lakh} onChange={(e) => setNonNeg("kcc_limit_inr_lakh", e.target.value)} /></Field>
+                  <Field label="KCC Limit (INR Lakh)" required error={errors.kcc_limit_inr_lakh} hint="Required because you have a KCC Account"><input max="1000" step="0.01" type="number" className="gt-input" value={form.kcc_limit_inr_lakh} onChange={(e) => setNonNeg("kcc_limit_inr_lakh", e.target.value)} /></Field>
                 )}
               </div>
             </SubSection>
@@ -1315,26 +1358,54 @@ export default function DataEntryWizard() {
                 <Field label="Availed any Government Scheme (Last 2 Years)" required><YesNo value={form.scheme_availed} onChange={(v) => set("scheme_availed", v)} /></Field>
                 {form.scheme_availed === "Yes" && (
                   <>
-                    <Field label="Name of Scheme" required error={errors.scheme_name} hint="Required because a Government Scheme was availed">
-                      {/* A native <datalist> is unreliable on Android Chrome (often
-                          renders no suggestions at all) — a plain text field plus
-                          tappable suggestion chips works consistently everywhere. */}
-                      <input className="gt-input" value={form.scheme_name} onChange={(e) => set("scheme_name", e.target.value)} placeholder={t("Type or pick a scheme below", lang)} />
+                    <Field label="Name of Scheme" required error={errors.scheme_name} hint="Required because a Government Scheme was availed — select all that apply">
+                      {/* CR-15: a farmer can be enrolled in more than one scheme, so
+                          this is a multi-select over the master list. A native
+                          <datalist> was found unreliable on Android Chrome (OBS-013),
+                          which is why this stays tappable chips rather than a
+                          dropdown — plus a free-text "other" entry for anything not
+                          yet in the master list. */}
                       {schemes.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {schemes.map((s) => {
+                            const selected = (form.scheme_name || []).includes(s);
+                            return (
+                              <button
+                                type="button"
+                                key={s}
+                                onClick={() => toggleMulti("scheme_name", s)}
+                                className={`text-[11px] px-2 py-1 rounded-full border whitespace-nowrap flex items-center gap-1 ${
+                                  selected
+                                    ? "gt-gradient text-white border-transparent"
+                                    : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+                                }`}
+                              >
+                                {selected && <CheckCircle2 size={11} />} {s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <input
+                        className="gt-input mt-1.5"
+                        value={schemeNameInput}
+                        onChange={(e) => setSchemeNameInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && schemeNameInput.trim()) {
+                            e.preventDefault();
+                            toggleMulti("scheme_name", schemeNameInput.trim());
+                            setSchemeNameInput("");
+                          }
+                        }}
+                        placeholder="Type a scheme not listed above, then press Enter"
+                      />
+                      {(form.scheme_name || []).filter((s: string) => !schemes.includes(s)).length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {schemes.map((s) => (
-                            <button
-                              type="button"
-                              key={s}
-                              onClick={() => set("scheme_name", s)}
-                              className={`text-[11px] px-2 py-1 rounded-full border whitespace-nowrap ${
-                                form.scheme_name === s
-                                  ? "gt-gradient text-white border-transparent"
-                                  : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
-                              }`}
-                            >
+                          {(form.scheme_name || []).filter((s: string) => !schemes.includes(s)).map((s: string) => (
+                            <span key={s} className="text-[11px] px-2 py-1 rounded-full gt-gradient text-white flex items-center gap-1">
                               {s}
-                            </button>
+                              <button type="button" onClick={() => toggleMulti("scheme_name", s)} className="font-bold">×</button>
+                            </span>
                           ))}
                         </div>
                       )}

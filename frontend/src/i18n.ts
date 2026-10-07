@@ -86,7 +86,7 @@ export const LABELS: Record<string, { en: string; kn: string }> = {
   karnataka: { en: "Karnataka", kn: "ಕರ್ನಾಟಕ" },
 
   // App shell / nav
-  appTitle: { en: "Arecanut Farmer Survey", kn: "ಅಡಿಕೆ ರೈತ ಸಮೀಕ್ಷೆ" },
+  appTitle: { en: "Madhyastha", kn: "ಮಧ್ಯಸ್ಥ" }, // CR-20: platform renamed from "Arecanut Farmer Survey"
   appSubtitle: { en: "Karnataka · NCCF Data Collection", kn: "ಕರ್ನಾಟಕ · NCCF ಮಾಹಿತಿ ಸಂಗ್ರಹ" },
   navDashboard: { en: "Dashboard", kn: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್" },
   navNewEntry: { en: "New Entry", kn: "ಹೊಸ ನಮೂದು" },

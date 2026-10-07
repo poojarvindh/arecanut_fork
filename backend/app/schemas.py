@@ -243,7 +243,7 @@ class SurveyIn(BaseModel):
     credit_gap_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)  # capped at INR 10 crore (1000 lakh)
 
     scheme_availed: str = Field(..., max_length=10)
-    scheme_name: Optional[str] = Field(None, max_length=STR_MAX)
+    scheme_name: Optional[str] = Field(None, max_length=TEXT_MAX)  # CR-15: multi-select, comma-joined
     scheme_benefits: Optional[str] = Field(None, max_length=TEXT_MAX)
 
     irrigation_source: Optional[str] = Field(None, max_length=TEXT_MAX)
@@ -254,10 +254,10 @@ class SurveyIn(BaseModel):
     crop_insurance_detail: Optional[str] = Field(None, max_length=TEXT_MAX)
     natural_calamity_5yr: Optional[str] = Field(None, max_length=10)
 
-    input_source: str = Field(..., max_length=STR_MAX)
+    input_source: str = Field(..., max_length=TEXT_MAX)  # CR-14: multi-select, comma-joined
     input_source_other: Optional[str] = Field(None, max_length=STR_MAX)
     input_distance_km: Optional[float] = Field(None, ge=0, le=100000)
-    input_challenges: Optional[str] = Field(None, max_length=STR_MAX)
+    input_challenges: Optional[str] = Field(None, max_length=TEXT_MAX)  # CR-14: multi-select, comma-joined
     input_challenges_other: Optional[str] = Field(None, max_length=STR_MAX)
     input_purchase_delay_days: Optional[int] = Field(None, ge=0, le=3650)
 

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Arecanut Farmer Survey</string>
-    <string name="title_activity_main">Arecanut Farmer Survey</string>
+    <string name="app_name">Madhyastha</string>
+    <string name="title_activity_main">Madhyastha</string>
     <string name="package_name">com.gtbharat.arecanutsurvey</string>
     <string name="custom_url_scheme">com.gtbharat.arecanutsurvey</string>
 </resources>

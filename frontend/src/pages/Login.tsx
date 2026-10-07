@@ -42,7 +42,7 @@ export default function Login() {
           <div className="w-14 h-14 rounded-2xl gt-gradient text-white flex items-center justify-center">
             <Sprout size={28} />
           </div>
-          <div className="text-lg font-bold text-[var(--gt-purple-dark)]">Arecanut Farmer Survey</div>
+          <div className="text-lg font-bold text-[var(--gt-purple-dark)]">Madhyastha</div>
           <div className="text-xs text-[var(--gt-text-muted)]">Karnataka · NCCF Data Collection</div>
         </div>
 

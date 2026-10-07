@@ -231,9 +231,9 @@ export default function SurveyView() {
         </Section>
 
         <Section icon={Truck} title="Input Supply Chain">
-          <Row label="Source" value={s.input_source} />
+          <Row label="Source" value={s.input_source?.split(",").join(", ")} />
           <Row label="Distance (Km)" value={s.input_distance_km} />
-          <Row label="Challenges" value={s.input_challenges} />
+          <Row label="Challenges" value={s.input_challenges?.split(",").join(", ")} />
           {s.input_purchase_delay_days != null && <Row label="Average Delay (Days)" value={s.input_purchase_delay_days} />}
         </Section>
 
@@ -282,7 +282,7 @@ export default function SurveyView() {
           <Row label="Availed" value={s.scheme_availed} />
           {s.scheme_availed === "Yes" && (
             <>
-              <Row label="Scheme Name" value={s.scheme_name} />
+              <Row label="Scheme Name" value={s.scheme_name?.split(",").join(", ")} />
               <Row label="Benefits" value={s.scheme_benefits} />
             </>
           )}
