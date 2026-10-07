@@ -120,6 +120,25 @@ export default function SurveyView() {
         </div>
       </div>
 
+      {Array.isArray(s.plots) && s.plots.length > 0 && (
+        <div className="gt-card p-4">
+          <div className="font-semibold text-sm mb-2 text-[var(--gt-purple-dark)]">Plot / Land Records ({s.plots.length})</div>
+          <div className="space-y-2">
+            {s.plots.map((p: any, i: number) => (
+              <div key={i} className="flex items-center justify-between text-sm border-b border-[var(--gt-border)] last:border-0 py-1.5">
+                <span className="font-medium">{p.label || `Plot ${i + 1}`}</span>
+                <span className="text-[var(--gt-text-muted)]">Reported: <b>{p.reported_area_acres} acres</b></span>
+                <span className="text-[var(--gt-purple-dark)]">GPS-Measured: <b>{p.area_acres != null ? `${p.area_acres} acres` : "Not captured"}</b></span>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-6 text-sm mt-2 pt-2 border-t border-[var(--gt-border)]">
+            <span>Total Reported: <b>{s.plots.reduce((sum: number, p: any) => sum + (p.reported_area_acres || 0), 0).toFixed(2)} acres</b></span>
+            <span>Total GPS-Measured: <b>{s.plots.reduce((sum: number, p: any) => sum + (p.area_acres || 0), 0).toFixed(2)} acres</b></span>
+          </div>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-4">
         <Section icon={UserSearch} title="Farmer Link">
           <Row label="Farmer Name" value={s.farmer_name} />

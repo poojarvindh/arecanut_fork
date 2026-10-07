@@ -143,6 +143,35 @@ class FarmerLookup(BaseModel):
     district: Optional[str] = None
 
 
+class LatLngPoint(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class FarmerPlotIn(BaseModel):
+    """CR-17: one plot/land record. `points`/`area_acres`/`method` mirror the
+    legacy single-boundary shape — a plot is reported-area-only until a
+    boundary is actually walked/drawn/uploaded for it."""
+    label: str = Field("Plot 1", max_length=STR_MAX)
+    reported_area_acres: float = Field(..., ge=0, le=100000)
+    points: Optional[List[LatLngPoint]] = None
+    area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    method: Optional[str] = Field(None, pattern="^(draw|excel|gps)$")
+
+    @field_validator("points")
+    @classmethod
+    def points_form_a_polygon(cls, v):
+        if v is not None and len(v) < 3:
+            raise ValueError("a captured plot boundary needs at least 3 points")
+        return v
+
+
+class FarmerPlotOut(FarmerPlotIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    captured_at: Optional[datetime] = None
+
+
 class SurveyIn(BaseModel):
     # Optional at the API layer: a brand-new farmer's id is auto-generated
     # server-side once the whole survey validates (see create_survey in
@@ -280,6 +309,13 @@ class SurveyIn(BaseModel):
     plot_boundary_area_acres: Optional[float] = Field(None, ge=0, le=1_000_000)
     plot_boundary_method: Optional[str] = Field(None, max_length=20)
 
+    # CR-17: multiple plot/land records per farmer. When present (new/edited
+    # surveys from the updated wizard), this supersedes the single legacy
+    # plot_boundary field above for validation purposes — main.py still keeps
+    # plot_boundary/* in sync with plots[0] so older consumers (Plots Map,
+    # dashboard filters) keep working unchanged.
+    plots: Optional[List[FarmerPlotIn]] = None
+
     @field_validator("mobile_no")
     @classmethod
     def validate_mobile(cls, v: str) -> str:
@@ -376,6 +412,17 @@ class SurveyIn(BaseModel):
 
     @model_validator(mode="after")
     def plot_boundary_required(self):
+        # CR-17: a survey using the new multi-plot flow (plots is not None)
+        # is validated by at-least-one-plot-has-a-boundary instead of the
+        # single legacy field — every plot still needs a reported area
+        # (enforced by FarmerPlotIn itself), but the boundary walk/draw/upload
+        # is only mandatory somewhere across the set, not on every plot.
+        if self.plots is not None:
+            if len(self.plots) == 0:
+                raise ValueError("at least one plot is required")
+            if not any(p.points and len(p.points) >= 3 for p in self.plots):
+                raise ValueError("at least one plot needs a captured boundary — capture at least 3 points via Draw on Map, Excel upload, or GPS walk")
+            return self
         try:
             points = json.loads(self.plot_boundary) if self.plot_boundary else []
         except (ValueError, TypeError):
@@ -395,6 +442,7 @@ class SurveyOut(SurveyIn):
     plot_boundary_area_acres: Optional[float] = None
     plot_boundary_method: Optional[str] = None
     plot_boundary_captured_at: Optional[datetime] = None
+    plots: List[FarmerPlotOut] = Field(default_factory=list)  # CR-17
 
     # These two rules are intentionally input-only (create/update): they enforce
     # requirements for new/edited data, but records saved before a requirement

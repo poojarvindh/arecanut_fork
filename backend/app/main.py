@@ -522,6 +522,39 @@ def generate_farmer_id(db: Session) -> str:
     return f"NCCF/KA/{max_n + 1:04d}"
 
 
+def sync_plots(db: Session, survey: m.FarmerSurvey, plots_in):
+    """CR-17: replace a survey's FarmerPlot rows wholesale from the submitted
+    list, and mirror plots[0] into the legacy single-boundary columns so
+    older consumers (Plots Map, dashboard filters) keep working unchanged.
+    No-op when the request didn't send `plots` at all (old-style clients)."""
+    if plots_in is None:
+        return
+    survey.plots.clear()  # cascade="all, delete-orphan" removes the old rows on commit
+    now = datetime.datetime.utcnow()
+    for i, p in enumerate(plots_in):
+        points_json = json.dumps([pt.model_dump() for pt in p.points]) if p.points else None
+        survey.plots.append(m.FarmerPlot(
+            sort_order=i,
+            label=p.label,
+            reported_area_acres=p.reported_area_acres,
+            boundary=points_json,
+            area_acres=p.area_acres,
+            method=p.method,
+            captured_at=now if points_json else None,
+        ))
+    first = plots_in[0] if plots_in else None
+    if first and first.points:
+        survey.plot_boundary = json.dumps([pt.model_dump() for pt in first.points])
+        survey.plot_boundary_area_acres = first.area_acres
+        survey.plot_boundary_method = first.method
+        survey.plot_boundary_captured_at = now
+    else:
+        survey.plot_boundary = None
+        survey.plot_boundary_area_acres = None
+        survey.plot_boundary_method = None
+        survey.plot_boundary_captured_at = None
+
+
 @app.post("/api/surveys", response_model=SurveyOut)
 def create_survey(
     request: Request,
@@ -537,6 +570,7 @@ def create_survey(
             return existing
 
     data = payload.dict()
+    plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
     data["total_income_inr"] = compute_income(payload)
     data["entry_timestamp"] = datetime.datetime.utcnow()
     data["created_by_user_id"] = user.id
@@ -546,6 +580,8 @@ def create_survey(
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     survey = m.FarmerSurvey(**data)
     db.add(survey)
+    db.flush()  # assigns survey.id so FarmerPlot rows can reference it
+    sync_plots(db, survey, payload.plots)
     db.commit()
     db.refresh(survey)
     audit(db, request, "survey_create", user=user, resource=f"survey:{survey.id}")
@@ -564,6 +600,7 @@ def update_survey(
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found")
     data = payload.dict()
+    plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
     data["total_income_inr"] = compute_income(payload)
     if not data.get("farmer_id"):
         data["farmer_id"] = survey.farmer_id  # never overwrite an assigned id with blank
@@ -571,6 +608,7 @@ def update_survey(
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     for k, v in data.items():
         setattr(survey, k, v)
+    sync_plots(db, survey, payload.plots)
     db.commit()
     db.refresh(survey)
     audit(db, request, "survey_update", user=user, resource=f"survey:{survey.id}")

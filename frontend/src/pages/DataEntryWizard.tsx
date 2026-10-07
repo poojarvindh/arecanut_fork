@@ -526,10 +526,23 @@ export default function DataEntryWizard() {
           scheme_name: s.scheme_name ? s.scheme_name.split(",") : [], // CR-15
           grading_rows: s.grading_rows ? JSON.parse(s.grading_rows) : [], // CR-05
         });
-        if (s.plot_boundary) {
+        // CR-17: prefer the multi-plot list when the backend returns one (every
+        // record saved via the new flow has it); fall back to the legacy single
+        // boundary for older records that predate multi-plot support.
+        if (Array.isArray(s.plots) && s.plots.length > 0) {
           try {
-            setPlotPoints(JSON.parse(s.plot_boundary));
-            if (s.plot_boundary_method) setPlotMethod(s.plot_boundary_method as CaptureMethod);
+            setPlots(s.plots.map((p: any, i: number) => ({
+              key: `p${i}`,
+              label: p.label || `Plot ${i + 1}`,
+              reportedArea: p.reported_area_acres != null ? String(p.reported_area_acres) : "",
+              method: (p.method as CaptureMethod) || "gps",
+              points: p.points || [],
+            })));
+          } catch {}
+        } else if (s.plot_boundary) {
+          try {
+            const points = JSON.parse(s.plot_boundary);
+            setPlots([{ key: "p0", label: "Plot 1", reportedArea: s.plot_boundary_area_acres != null ? String(s.plot_boundary_area_acres) : "", method: (s.plot_boundary_method as CaptureMethod) || "gps", points }]);
           } catch {}
         }
       });
@@ -643,20 +656,51 @@ export default function DataEntryWizard() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
-  const [plotMethod, setPlotMethod] = useState<CaptureMethod>("gps");
-  const [plotPoints, setPlotPoints] = useState<PlotBoundary>([]);
-  const plotArea = areaInAcres(plotPoints);
-  const plotValidation = validateBoundary(plotPoints);
+  // CR-17: multiple plot/land records per farmer, each with its own
+  // farmer-reported area and an optional GPS-measured boundary (draw/Excel/
+  // GPS, same capture methods as the old single-plot flow). `key` is a
+  // client-only identity for list rendering/updates — never sent to the API.
+  const [plots, setPlots] = useState<
+    { key: string; label: string; reportedArea: string; method: CaptureMethod; points: PlotBoundary }[]
+  >([{ key: "p0", label: "Plot 1", reportedArea: "", method: "gps", points: [] }]);
 
-  const switchPlotMethod = (next: CaptureMethod) => {
-    if (next === plotMethod) return;
-    if (plotPoints.length > 0) {
-      const ok = window.confirm("Switching methods will discard the in-progress plot boundary. Continue?");
-      if (!ok) return;
-    }
-    setPlotPoints([]);
-    setPlotMethod(next);
+  const addPlot = () => {
+    setPlots((prev) => [...prev, { key: `p${Date.now()}`, label: `Plot ${prev.length + 1}`, reportedArea: "", method: "gps", points: [] }]);
   };
+  const removePlot = (key: string) => {
+    setPlots((prev) => (prev.length > 1 ? prev.filter((p) => p.key !== key) : prev));
+  };
+  const updatePlot = (key: string, patch: Partial<{ label: string; reportedArea: string; points: PlotBoundary }>) => {
+    setPlots((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  };
+  const switchPlotMethod = (key: string, next: CaptureMethod) => {
+    setPlots((prev) => {
+      const plot = prev.find((p) => p.key === key);
+      if (!plot || next === plot.method) return prev;
+      if (plot.points.length > 0) {
+        const ok = window.confirm("Switching methods will discard the in-progress plot boundary. Continue?");
+        if (!ok) return prev;
+      }
+      return prev.map((p) => (p.key === key ? { ...p, method: next, points: [] } : p));
+    });
+  };
+
+  // At least one plot needs a captured, valid boundary before submit — the
+  // same mandatory-geo-tag rule as before, just across the set of plots
+  // instead of a single field. Reported area is required on every plot
+  // (enforced in getErrors-style validation at submit time, see `submit`).
+  const plotsValidation = useMemo(() => {
+    const anyValidBoundary = plots.some((p) => validateBoundary(p.points).valid);
+    if (!anyValidBoundary) return { valid: false, error: "At least one plot needs a captured boundary — walk/draw/upload at least 3 points." };
+    const badBoundary = plots.find((p) => p.points.length > 0 && !validateBoundary(p.points).valid);
+    if (badBoundary) return { valid: false, error: validateBoundary(badBoundary.points).error };
+    const missingArea = plots.find((p) => isBlank(p.reportedArea) || Number(p.reportedArea) <= 0);
+    if (missingArea) return { valid: false, error: `${missingArea.label}: reported area is required and must be greater than 0.` };
+    return { valid: true };
+  }, [plots]);
+
+  const totalReportedArea = useMemo(() => plots.reduce((sum, p) => sum + (parseFloat(p.reportedArea) || 0), 0), [plots]);
+  const totalGpsArea = useMemo(() => plots.reduce((sum, p) => sum + (validateBoundary(p.points).valid ? areaInAcres(p.points) : 0), 0), [plots]);
 
   // Uses @capacitor/geolocation so the same call works via the browser
   // Geolocation API on web and via native GPS on the packaged Android app.
@@ -738,9 +782,9 @@ export default function DataEntryWizard() {
       setSubmitError(t("Please fix {n} error(s) before submitting.", lang).replace("{n}", String(Object.keys(validationErrors).length)));
       return;
     }
-    if (!plotValidation.valid) {
+    if (!plotsValidation.valid) {
       setStep(STEPS.length - 1);
-      setSubmitError(t("Plot boundary is mandatory — capture it via Draw on Map, Excel upload, or GPS walk before submitting.", lang));
+      setSubmitError(plotsValidation.error || t("Plot boundary is mandatory — capture it via Draw on Map, Excel upload, or GPS walk before submitting.", lang));
       return;
     }
 
@@ -807,9 +851,20 @@ export default function DataEntryWizard() {
       scheme_name: (form.scheme_name || []).join(","), // CR-15
       geo_lat: form.geo_lat ? parseFloat(form.geo_lat) : null,
       geo_long: form.geo_long ? parseFloat(form.geo_long) : null,
-      plot_boundary: plotValidation.valid ? JSON.stringify(plotPoints) : null,
-      plot_boundary_area_acres: plotValidation.valid ? plotArea : null,
-      plot_boundary_method: plotValidation.valid ? plotMethod : null,
+      // CR-17: multiple plots. Legacy plot_boundary/* fields are still sent
+      // (mirroring plot[0]) purely so an older build of this payload shape
+      // would degrade gracefully — the backend recomputes them from `plots`
+      // itself and ignores these three whenever `plots` is present.
+      plot_boundary: validateBoundary(plots[0].points).valid ? JSON.stringify(plots[0].points) : null,
+      plot_boundary_area_acres: validateBoundary(plots[0].points).valid ? areaInAcres(plots[0].points) : null,
+      plot_boundary_method: validateBoundary(plots[0].points).valid ? plots[0].method : null,
+      plots: plots.map((p) => ({
+        label: p.label,
+        reported_area_acres: parseFloat(p.reportedArea) || 0,
+        points: validateBoundary(p.points).valid ? p.points : null,
+        area_acres: validateBoundary(p.points).valid ? areaInAcres(p.points) : null,
+        method: validateBoundary(p.points).valid ? p.method : null,
+      })),
     };
     delete payload.id;
     delete payload.entry_timestamp;
@@ -1669,45 +1724,85 @@ export default function DataEntryWizard() {
             </div>
 
             <div className="mb-2">
-              <div className="font-semibold text-sm mb-1 text-[var(--gt-purple-dark)]">{t("Plot Boundary", lang)} <span className="text-[var(--gt-danger)]">*</span></div>
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-sm text-[var(--gt-purple-dark)]">{t("Plot / Land Records", lang)} <span className="text-[var(--gt-danger)]">*</span></div>
+                <button type="button" onClick={addPlot} className="text-sm text-[var(--gt-purple-dark)] font-medium">+ {t("Add Plot", lang)}</button>
+              </div>
               <p className="text-xs text-[var(--gt-text-muted)] mb-3">
-                {t("Map the exact plot boundary — draw it on the map, upload GPS points from Excel/CSV, or walk the boundary with the device GPS. This is required before the survey can be submitted; it can still be edited later from the farmer's record.", lang)}
+                {t("A farmer may hold more than one plot, including in different locations. Add one entry per plot — each needs a reported area; at least one across the whole set needs a GPS-measured boundary (draw on map, upload Excel/CSV, or walk with the device GPS). This is required before the survey can be submitted and can still be edited later from the farmer's record.", lang)}
               </p>
 
-              <div className="flex gap-2 overflow-x-auto pb-1 mb-3">
-                {PLOT_METHODS.map(({ key, label, icon: Icon }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => switchPlotMethod(key)}
-                    className={`shrink-0 flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-full border whitespace-nowrap transition-colors ${
-                      plotMethod === key
-                        ? "gt-gradient text-white border-transparent shadow-sm"
-                        : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
-                    }`}
-                  >
-                    <Icon size={15} /> {t(label, lang)}
-                  </button>
-                ))}
+              <div className="space-y-4">
+                {plots.map((plot) => {
+                  const area = areaInAcres(plot.points);
+                  const validation = validateBoundary(plot.points);
+                  const reported = parseFloat(plot.reportedArea) || 0;
+                  const diffPct = validation.valid && reported > 0 ? Math.abs(area - reported) / reported * 100 : null;
+                  return (
+                    <div key={plot.key} className="gt-card p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <input className="gt-input flex-1" value={plot.label} onChange={(e) => updatePlot(plot.key, { label: e.target.value })} placeholder={t("Plot label", lang)} />
+                        {plots.length > 1 && (
+                          <button type="button" onClick={() => removePlot(plot.key)} className="gt-input px-3 text-red-600 shrink-0">×</button>
+                        )}
+                      </div>
+                      <Field label="Reported Area (Acres)" required>
+                        <input type="number" min="0" step="0.01" className="gt-input" value={plot.reportedArea} onChange={(e) => updatePlot(plot.key, { reportedArea: e.target.value.replace(/^-+/, "") })} />
+                      </Field>
+
+                      <div className="flex gap-2 overflow-x-auto pb-1 mb-2 mt-2">
+                        {PLOT_METHODS.map(({ key, label, icon: Icon }) => (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => switchPlotMethod(plot.key, key)}
+                            className={`shrink-0 flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-full border whitespace-nowrap transition-colors ${
+                              plot.method === key
+                                ? "gt-gradient text-white border-transparent shadow-sm"
+                                : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+                            }`}
+                          >
+                            <Icon size={15} /> {t(label, lang)}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="gt-card p-3 flex items-center gap-4 text-sm mb-2 flex-wrap">
+                        <span><b>{plot.points.length}</b> {t("vertices", lang)}</span>
+                        <span className="text-[var(--gt-purple-dark)] font-semibold">{t("GPS-measured:", lang)} {formatArea(area, lang)}</span>
+                        <span className="text-[var(--gt-text-muted)]">{t("Reported:", lang)} {reported.toFixed(2)} {t("acres", lang)}</span>
+                        {diffPct !== null && (
+                          <span className={`text-xs font-medium ${diffPct > 10 ? "text-[var(--gt-danger)]" : "text-[var(--gt-success)]"}`}>
+                            {diffPct > 10 ? t("⚠ differs by", lang) : t("✓ matches within", lang)} {diffPct.toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="gt-card p-4">
+                        {plot.method === "draw" && <DrawMapTab points={plot.points} onChange={(pts) => updatePlot(plot.key, { points: pts })} />}
+                        {plot.method === "excel" && <ExcelUploadTab onParsed={(pts) => updatePlot(plot.key, { points: pts })} />}
+                        {plot.method === "gps" && <GpsCaptureTab points={plot.points} onChange={(pts) => updatePlot(plot.key, { points: pts })} />}
+                      </div>
+
+                      {plot.points.length > 0 && !validation.valid && (
+                        <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-xs rounded-lg px-3 py-2 mt-3">
+                          <AlertCircle size={14} /> {validation.error}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
-              <div className="gt-card p-3 flex items-center gap-4 text-sm mb-3">
-                <span><b>{plotPoints.length}</b> {t("vertices", lang)}</span>
-                <span className="text-[var(--gt-purple-dark)] font-semibold">{formatArea(plotArea, lang)}</span>
-                {form.areca_area_acres && plotPoints.length >= 3 && (
-                  <span className="text-xs text-[var(--gt-text-muted)]">{t("Declared areca area:", lang)} {form.areca_area_acres} {t("acres", lang)}</span>
-                )}
+              <div className="gt-card p-3 mt-3 bg-[#F1EBF7] border-none flex items-center gap-4 text-sm flex-wrap">
+                <span className="font-semibold text-[var(--gt-purple-dark)]">{t("Total across all plots:", lang)}</span>
+                <span>{t("Reported", lang)} <b>{totalReportedArea.toFixed(2)} {t("acres", lang)}</b></span>
+                <span>{t("GPS-Measured", lang)} <b>{totalGpsArea.toFixed(2)} {t("acres", lang)}</b></span>
               </div>
 
-              <div className="gt-card p-4">
-                {plotMethod === "draw" && <DrawMapTab points={plotPoints} onChange={setPlotPoints} />}
-                {plotMethod === "excel" && <ExcelUploadTab onParsed={setPlotPoints} />}
-                {plotMethod === "gps" && <GpsCaptureTab points={plotPoints} onChange={setPlotPoints} />}
-              </div>
-
-              {plotPoints.length > 0 && !plotValidation.valid && (
+              {!plotsValidation.valid && (
                 <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-xs rounded-lg px-3 py-2 mt-3">
-                  <AlertCircle size={14} /> {plotValidation.error}
+                  <AlertCircle size={14} /> {plotsValidation.error}
                 </div>
               )}
             </div>
