@@ -114,7 +114,7 @@ export default function FarmerList() {
                 <td className="p-3">
                   <button
                     className="text-[var(--gt-purple)] text-xs font-semibold underline"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/entry?id=${r.id}`); }}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/entry/farmer?id=${r.id}`); }}
                   >
                     {tr("edit", lang)}
                   </button>

@@ -3,11 +3,12 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Pencil, ArrowLeft, UserSearch, Handshake, MapPin, LandPlot, Wheat,
   Coins, Warehouse, TriangleAlert, Sprout, Wrench, Truck, Smartphone, CreditCard,
-  Landmark, Droplets, FlaskConical, ScanLine, Map,
+  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2,
 } from "lucide-react";
 import { api } from "../api";
 import { useLang } from "../LangContext";
 import { trDistrict, trTaluka, trVillage } from "../i18n";
+import { useAuth } from "../AuthContext";
 
 const HOUSEHOLD_INCOME_BRACKET_LABELS: Record<string, string> = {
   "<10000": "Less than ₹10,000",
@@ -44,12 +45,27 @@ export default function SurveyView() {
   const justSaved = params.get("justSaved") === "1";
   const navigate = useNavigate();
   const { lang } = useLang();
+  const { user } = useAuth();
   const [s, setS] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     api.getSurvey(Number(id)).then(setS).catch((e) => setError(e.message));
   }, [id]);
+
+  const handleDelete = async () => {
+    if (!s) return;
+    if (!confirm(`Delete the record for ${s.farmer_name} (${s.farmer_id})? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteSurvey(s.id);
+      navigate("/farmers");
+    } catch (e: any) {
+      setError(e.message);
+      setDeleting(false);
+    }
+  };
 
   if (error) return <div className="text-center py-20 text-[var(--gt-danger)]">{error}</div>;
   if (!s) return <div className="text-center py-20 text-[var(--gt-text-muted)]">Loading survey…</div>;
@@ -74,9 +90,18 @@ export default function SurveyView() {
           <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/plot-boundary`)}>
             <Map size={15} /> Plot Boundary
           </button>
-          <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry?id=${s.id}`)}>
+          <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry/farmer?id=${s.id}`)}>
             <Pencil size={15} /> Edit
           </button>
+          {user?.role === "admin" && (
+            <button
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-[var(--gt-danger)]/40 text-[var(--gt-danger)] hover:bg-red-50 disabled:opacity-60"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              <Trash2 size={15} /> {deleting ? "Deleting…" : "Delete"}
+            </button>
+          )}
         </div>
       </div>
 

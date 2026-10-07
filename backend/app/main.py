@@ -377,10 +377,22 @@ def get_options(list_code: str = Query(...), db: Session = Depends(get_db)):
 # ---------------- FARMER MASTER LOOKUP (Module 0: search by Aadhaar/Mobile) ----------------
 
 @app.get("/api/farmer-master/lookup", response_model=Optional[FarmerLookup])
-def lookup_farmer(q: str = Query(..., description="Aadhaar or Mobile number"), db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+def lookup_farmer(q: str = Query(..., description="Aadhaar, Mobile number, or Farmer ID"), db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
+    q = q.strip()
+    # Mobile/Aadhaar stay exact-match — they're sensitive identifiers, and partial
+    # matching on them would be both a privacy smell and ambiguous (many farmers
+    # could share a partial digit sequence). Farmer ID is different: it's not
+    # sensitive, and was found to only match when typed with the exact case and
+    # full "NCCF/KA/0007" format — a user typing "0007" or "ncaf/ka/0007" got no
+    # result even though the farmer exists. Farmer ID now matches case-insensitively
+    # and on a partial/contains basis, same as how this ID appears in the UI elsewhere.
     fm = (
         db.query(m.FarmerMaster)
-        .filter((m.FarmerMaster.mobile_no == q) | (m.FarmerMaster.aadhaar_no == q) | (m.FarmerMaster.farmer_id == q))
+        .filter(
+            (m.FarmerMaster.mobile_no == q)
+            | (m.FarmerMaster.aadhaar_no == q)
+            | (func.lower(m.FarmerMaster.farmer_id).contains(q.lower()))
+        )
         .first()
     )
     if not fm:

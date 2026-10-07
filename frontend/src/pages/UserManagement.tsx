@@ -200,6 +200,11 @@ export default function UserManagement() {
               <div>
                 <label className="text-xs font-medium text-[var(--gt-text-muted)]">{editing ? "New Password (leave blank to keep)" : "Password"}</label>
                 <input type="password" className="gt-input w-full mt-1" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                {form.password && (
+                  <p className="text-[11px] text-[var(--gt-text-muted)] mt-1">
+                    Must be at least 10 characters, with at least one uppercase letter and one digit.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs font-medium text-[var(--gt-text-muted)]">Role</label>

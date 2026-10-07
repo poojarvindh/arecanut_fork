@@ -989,10 +989,13 @@ export default function DataEntryWizard() {
               <div className="grid md:grid-cols-2 gap-x-4">
                 <Field label="Total Annual Cost of Cultivation (INR)" required error={errors.cultivation_cost_inr}><input max="100000000" type="number" step="1" className="gt-input" value={form.cultivation_cost_inr} onChange={(e) => setNonNeg("cultivation_cost_inr", e.target.value)} /></Field>
                 <Field label="Sale Type" required>
+                  {/* "Sold both raw and processed areca" removed from the picker per
+                      client request (ENT-14) — existing records that already used it
+                      still read/edit correctly, since every downstream check below
+                      still recognizes the value; only new entries can no longer pick it. */}
                   <select className="gt-input" value={form.sale_type} onChange={(e) => set("sale_type", e.target.value)}>
                     <option value="Sold raw areca">{t("Sold raw areca", lang)}</option>
                     <option value="Sold processed areca">{t("Sold processed areca", lang)}</option>
-                    <option value="Sold both raw and processed areca">{t("Sold both raw and processed areca", lang)}</option>
                   </select>
                 </Field>
                 {(form.sale_type === "Sold raw areca" || form.sale_type === "Sold both raw and processed areca") && (
