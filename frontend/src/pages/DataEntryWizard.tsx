@@ -423,6 +423,17 @@ export default function DataEntryWizard() {
   const [villageUnlocked, setVillageUnlocked] = useState(false);
   const villageLocked = !!form.village && !villageUnlocked;
 
+  // CR-02: some testers want the original District -> Taluka -> Village cascade
+  // back; others found it slower than searching the village directly (that's
+  // exactly why it was replaced with search in an earlier round). Rather than
+  // re-relitigate this, both are offered — search stays the default, with a
+  // toggle to the cascade. The preference is remembered per-device so an
+  // enumerator doesn't have to re-pick it on every new entry.
+  const [locationMode, setLocationMode] = useState<"search" | "cascade">(
+    () => (localStorage.getItem("gt_location_mode") as "search" | "cascade") || "search"
+  );
+  useEffect(() => localStorage.setItem("gt_location_mode", locationMode), [locationMode]);
+
   useEffect(() => {
     api.villagesFlat().then(setVillagesFlat);
     api.societies().then(setSocieties);
@@ -447,6 +458,23 @@ export default function DataEntryWizard() {
       .filter((v) => v.village.toLowerCase().includes(q) || trVillage(v.village, lang).toLowerCase().includes(q))
       .slice(0, 8);
   }, [villageQuery, villagesFlat, lang]);
+
+  // CR-02 cascade mode: derived entirely from the already-loaded villagesFlat
+  // list (no extra API calls needed) rather than the separate
+  // districts()/talukas()/villages() endpoints — those still exist server-side
+  // but every value they'd return is already present in villagesFlat.
+  const cascadeDistricts = useMemo(
+    () => Array.from(new Set(villagesFlat.map((v) => v.district))).sort(),
+    [villagesFlat]
+  );
+  const cascadeTalukas = useMemo(
+    () => Array.from(new Set(villagesFlat.filter((v) => v.district === form.district).map((v) => v.taluka))).sort(),
+    [villagesFlat, form.district]
+  );
+  const cascadeVillages = useMemo(
+    () => villagesFlat.filter((v) => v.district === form.district && v.taluka === form.taluka).map((v) => v.village).sort(),
+    [villagesFlat, form.district, form.taluka]
+  );
 
   const selectVillage = (v: { village: string; taluka: string; district: string }) => {
     setForm((f: any) => ({ ...f, village: v.village, taluka: v.taluka, district: v.district }));
@@ -879,74 +907,128 @@ export default function DataEntryWizard() {
             </SubSection>
 
             <SubSection icon={MapPin} title="Location Details">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
                 <div className="text-sm text-[var(--gt-text-muted)]">
-                  {villageLocked
-                    ? t("Village is locked once selected — use \"Change Village\" if it was picked in error.", lang)
-                    : t("Start typing the village name — Taluka and District fill in automatically.", lang)}
+                  {locationMode === "search"
+                    ? (villageLocked
+                        ? t("Village is locked once selected — use \"Change Village\" if it was picked in error.", lang)
+                        : t("Start typing the village name — Taluka and District fill in automatically.", lang))
+                    : "Pick District, then Taluka, then Village."}
                 </div>
-                {villageLocked && (
+                <div className="flex items-center gap-3 shrink-0">
+                  {villageLocked && (
+                    <button
+                      type="button"
+                      className="text-xs text-[var(--gt-purple)] underline"
+                      onClick={() => {
+                        if (window.confirm("Changing the village is not normally allowed once entered. Continue only if this was selected in error. Proceed?")) {
+                          setVillageUnlocked(true);
+                          setVillageQuery("");
+                        }
+                      }}
+                    >
+                      {t("Change Village", lang)}
+                    </button>
+                  )}
+                  {/* CR-02: lets a user who prefers the old cascade switch to it,
+                      without taking the village-first search away from everyone
+                      else — both read/write the same form.village/taluka/district. */}
                   <button
                     type="button"
-                    className="text-xs text-[var(--gt-purple)] underline shrink-0 ml-2"
-                    onClick={() => {
-                      if (window.confirm("Changing the village is not normally allowed once entered. Continue only if this was selected in error. Proceed?")) {
-                        setVillageUnlocked(true);
-                        setVillageQuery("");
-                      }
-                    }}
+                    className="text-xs text-[var(--gt-purple)] underline"
+                    onClick={() => setLocationMode(locationMode === "search" ? "cascade" : "search")}
                   >
-                    {t("Change Village", lang)}
+                    {locationMode === "search" ? "Switch to District → Taluka → Village" : "Switch to Village Search"}
                   </button>
-                )}
+                </div>
               </div>
 
-              <div className="grid md:grid-cols-3 gap-x-4">
-                <Field label={tr("village", lang)} required error={errors.village}>
-                  {villageLocked ? (
-                    <input className="gt-input bg-[#F6F4F9] disabled:text-[var(--gt-text-muted)]" readOnly value={trVillage(form.village, lang)} />
-                  ) : (
-                    <div className="relative">
-                      <input
-                        className="gt-input"
-                        placeholder={lang === "kn" ? "ಗ್ರಾಮದ ಹೆಸರು ಟೈಪ್ ಮಾಡಿ…" : "Type a village name…"}
-                        value={villageQuery}
-                        onChange={(e) => { setVillageQuery(e.target.value); setShowVillageSuggestions(true); }}
-                        onFocus={() => setShowVillageSuggestions(true)}
-                        onBlur={() => setTimeout(() => setShowVillageSuggestions(false), 150)}
-                      />
-                      {showVillageSuggestions && villageQuery.trim() && (
-                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-[var(--gt-border)] rounded-lg shadow-lg max-h-56 overflow-y-auto">
-                          {villageMatches.length > 0 ? (
-                            villageMatches.map((v) => (
-                              <button
-                                type="button"
-                                key={`${v.village}-${v.taluka}`}
-                                className="w-full text-left px-3 py-2 text-sm hover:bg-[#F1EBF7] border-b border-[var(--gt-border)] last:border-none"
-                                onMouseDown={() => selectVillage(v)}
-                              >
-                                <div className="font-medium">{trVillage(v.village, lang)}</div>
-                                <div className="text-[11px] text-[var(--gt-text-muted)]">{trTaluka(v.taluka, lang)}, {trDistrict(v.district, lang)}</div>
-                              </button>
-                            ))
-                          ) : (
-                            <div className="px-3 py-2 text-sm text-[var(--gt-text-muted)]">{t("No matching village found.", lang)}</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </Field>
-                <Field label={`${tr("taluka", lang)} ${t("(auto-filled)", lang)}`} error={errors.taluka}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={form.taluka ? trTaluka(form.taluka, lang) : "—"} />
-                </Field>
-                <Field label={`${tr("district", lang)} ${t("(auto-filled)", lang)}`} error={errors.district}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={form.district ? trDistrict(form.district, lang) : "—"} />
-                </Field>
-                <Field label={tr("state", lang)}>
-                  <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
-                </Field>
-              </div>
+              {locationMode === "search" ? (
+                <div className="grid md:grid-cols-3 gap-x-4">
+                  <Field label={tr("village", lang)} required error={errors.village}>
+                    {villageLocked ? (
+                      <input className="gt-input bg-[#F6F4F9] disabled:text-[var(--gt-text-muted)]" readOnly value={trVillage(form.village, lang)} />
+                    ) : (
+                      <div className="relative">
+                        <input
+                          className="gt-input"
+                          placeholder={lang === "kn" ? "ಗ್ರಾಮದ ಹೆಸರು ಟೈಪ್ ಮಾಡಿ…" : "Type a village name…"}
+                          value={villageQuery}
+                          onChange={(e) => { setVillageQuery(e.target.value); setShowVillageSuggestions(true); }}
+                          onFocus={() => setShowVillageSuggestions(true)}
+                          onBlur={() => setTimeout(() => setShowVillageSuggestions(false), 150)}
+                        />
+                        {showVillageSuggestions && villageQuery.trim() && (
+                          <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-[var(--gt-border)] rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                            {villageMatches.length > 0 ? (
+                              villageMatches.map((v) => (
+                                <button
+                                  type="button"
+                                  key={`${v.village}-${v.taluka}`}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-[#F1EBF7] border-b border-[var(--gt-border)] last:border-none"
+                                  onMouseDown={() => selectVillage(v)}
+                                >
+                                  <div className="font-medium">{trVillage(v.village, lang)}</div>
+                                  <div className="text-[11px] text-[var(--gt-text-muted)]">{trTaluka(v.taluka, lang)}, {trDistrict(v.district, lang)}</div>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-sm text-[var(--gt-text-muted)]">{t("No matching village found.", lang)}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Field>
+                  <Field label={`${tr("taluka", lang)} ${t("(auto-filled)", lang)}`} error={errors.taluka}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={form.taluka ? trTaluka(form.taluka, lang) : "—"} />
+                  </Field>
+                  <Field label={`${tr("district", lang)} ${t("(auto-filled)", lang)}`} error={errors.district}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={form.district ? trDistrict(form.district, lang) : "—"} />
+                  </Field>
+                  <Field label={tr("state", lang)}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
+                  </Field>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-3 gap-x-4">
+                  <Field label={tr("district", lang)} required error={errors.district}>
+                    <select
+                      className="gt-input"
+                      value={form.district}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, district: e.target.value, taluka: "", village: "" })); clearError("district"); clearError("taluka"); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeDistricts.map((d) => <option key={d} value={d}>{trDistrict(d, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("taluka", lang)} required error={errors.taluka}>
+                    <select
+                      className="gt-input"
+                      value={form.taluka}
+                      disabled={!form.district}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, taluka: e.target.value, village: "" })); clearError("taluka"); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeTalukas.map((tk) => <option key={tk} value={tk}>{trTaluka(tk, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("village", lang)} required error={errors.village}>
+                    <select
+                      className="gt-input"
+                      value={form.village}
+                      disabled={!form.taluka}
+                      onChange={(e) => { setForm((f: any) => ({ ...f, village: e.target.value })); clearError("village"); }}
+                    >
+                      <option value="">{t("Select", lang)}</option>
+                      {cascadeVillages.map((v) => <option key={v} value={v}>{trVillage(v, lang)}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={tr("state", lang)}>
+                    <input className="gt-input bg-[#F6F4F9]" readOnly value={tr("karnataka", lang)} />
+                  </Field>
+                </div>
+              )}
             </SubSection>
 
             <SubSection icon={Handshake} title="Society / FPC Linkage">
