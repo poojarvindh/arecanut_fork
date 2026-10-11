@@ -1,3 +1,4 @@
+import os
 import random
 import json
 import datetime
@@ -8,70 +9,24 @@ from .auth import hash_password
 random.seed(42)
 
 # ---------------- Karnataka Arecanut belt master geography ----------------
-GEO = {
-    "Shivamogga": {
-        "Sagar": ["Anandapuram", "Talaguppa", "Ambaragodlu", "Kogar"],
-        "Thirthahalli": ["Agumbe", "Muppane", "Hurulikoppa"],
-        "Hosanagara": ["Nagara", "Ripponpet", "Kelagote"],
-    },
-    "Chikkamagaluru": {
-        "Koppa": ["Balehonnur", "Kesave", "Hariharapura"],
-        "Sringeri": ["Kigga", "Mennasandra"],
-        "N.R.Pura": ["Kalasa", "Bhadra"],
-    },
-    "Davanagere": {
-        "Channagiri": ["Santhebennur", "Basavapatna"],
-        "Honnali": ["Nyamathi", "Ulchagatta"],
-    },
-    "Tumakuru": {
-        "Tiptur": ["Nonavinakere", "Kibbanahalli"],
-        "Turuvekere": ["Amruthur", "Handanakere"],
-    },
-    "Udupi": {
-        "Karkala": ["Miyar", "Mala", "Nitte"],
-        "Kundapura": ["Amasebailu", "Basrur"],
-    },
-    "Dakshina Kannada": {
-        "Puttur": ["Uppinangady", "Ariyadka"],
-        "Sullia": ["Aranthodu", "Kalmadka"],
-    },
-}
+# Loaded from a checked-in fixture rather than hardcoded here, because this
+# data has repeatedly drifted from reality: admins add/edit master-data
+# records (new societies, taluka-level FPCs, option-list entries, etc.)
+# directly in production via the Master Data screen, and a hardcoded literal
+# here would silently fall back out of sync with every such edit. Re-export
+# with `python -m app.export_master_data` (hits whatever backend/DB your env
+# points at) whenever production master data changes and you want a fresh
+# dev/seed snapshot of it.
+_MASTER_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "master_data_seed.json")
+with open(_MASTER_DATA_PATH, encoding="utf-8") as _f:
+    _MASTER_DATA = json.load(_f)
 
-SOCIETIES = [
-    "Malnad Arecanut Growers Cooperative Society",
-    "Sagar Taluk FPC Ltd",
-    "Shree Kshetra Arecanut Producer Company",
-    "CAMPCO - Central Areca Nut & Cocoa Marketing Coop",
-    "Koppa Areca Growers Society",
-    "Tumkur Areca FPC",
-    "Karkala Areca Producers Society",
-]
-
-CROPS_OTHER = ["Coconut", "Black Pepper", "Cocoa", "Banana", "Coffee", "Paddy", "Cardamom", "Nutmeg"]
-
-SCHEMES = [
-    "PM-KISAN", "PMFBY (Crop Insurance)", "Krishi Bhagya Scheme",
-    "Areca Nut Development Scheme (Karnataka)", "Soil Health Card Scheme",
-    "Kisan Credit Card", "NABARD Farm Mechanisation Subsidy",
-]
-
-MACHINES = [
-    "Arecanut Harvesting Pole", "Arecanut Sprayer (Power)", "Arecanut Sprayer (Manual)",
-    "Arecanut Dehusking Machine", "Areca Leaf Plate Making Machine", "Power Tiller",
-    "Water Pump Set", "Drone Sprayer",
-]
-
-OPTION_LISTS = {
-    "society_benefits": ["Credit Support", "Storage Support", "Market linkage", "Advisory Support", "Government Scheme convergence"],
-    "cultivation_challenges": ["Pest & Disease attacks", "Credit", "Market", "Advisory", "Labour shortage"],
-    "storage_source": ["Own Godown", "Society Warehouse", "Cold Storage", "Trader Facility"],
-    "logistics_provider": ["Farmer (Own)", "Aggregator", "Trader"],
-    "credit_source": ["Bank", "NBFC", "SHG", "Society", "Trader", "Relative"],
-    "irrigation_source": ["Borewell", "Pond", "Well", "Canal", "River", "Rainfed"],
-    "input_source": ["Society", "FPC", "Local Input Shop"],
-    "input_challenges": ["High Rate", "Quality Issues", "Availability"],
-    "marketing_channel": ["FPO", "Society", "Mandi", "Direct Trader"],
-}
+GEO = _MASTER_DATA["geo"]
+SOCIETIES = _MASTER_DATA["societies"]  # [{name, district, taluka, is_state_level}, ...]
+CROPS_OTHER = _MASTER_DATA["crops"]
+SCHEMES = _MASTER_DATA["schemes"]
+MACHINES = _MASTER_DATA["machines"]
+OPTION_LISTS = _MASTER_DATA["option_lists"]
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -146,10 +101,18 @@ def seed():
     db.bulk_insert_mappings(m.Taluka, taluka_rows)
     db.bulk_insert_mappings(m.Village, village_rows)
 
-    db.bulk_insert_mappings(m.Society, [{"name": s} for s in SOCIETIES])
+    db.bulk_insert_mappings(m.Society, [
+        {
+            "name": s["name"],
+            "is_state_level": s["is_state_level"],
+            "district_id": None if s["is_state_level"] else district_id_by_name.get(s["district"]),
+            "taluka_id": None if s["is_state_level"] else taluka_id_by_key.get((s["district"], s["taluka"])),
+        }
+        for s in SOCIETIES
+    ])
     db.bulk_insert_mappings(m.CropMaster, [{"name": c} for c in CROPS_OTHER])
     db.bulk_insert_mappings(m.SchemeMaster, [{"name": s} for s in SCHEMES])
-    db.bulk_insert_mappings(m.MachineMaster, [{"name": mc} for mc in MACHINES])
+    db.bulk_insert_mappings(m.MachineMaster, [{"name": mc, "sort_order": i} for i, mc in enumerate(MACHINES)])
     db.bulk_insert_mappings(m.OptionMaster, [
         {"list_code": list_code, "label": opt, "sort_order": i}
         for list_code, options in OPTION_LISTS.items()
@@ -182,7 +145,7 @@ def seed():
 
         # Module 1: Society linkage
         society_assoc = random.random() < 0.62
-        society_name = random.choice(SOCIETIES) if society_assoc else "NA"
+        society_name = random.choice(SOCIETIES)["name"] if society_assoc else "NA"
         society_since_year = random.randint(2005, 2023) if society_assoc else None
         society_benefits = ",".join(random.sample(OPTION_LISTS["society_benefits"], k=random.randint(1, 3))) if society_assoc else None
 
