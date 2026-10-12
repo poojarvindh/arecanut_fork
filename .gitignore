@@ -18,3 +18,5 @@ keystore/
 
 .vercel
 *.apk
+.DS_Store
+backend/venv/
