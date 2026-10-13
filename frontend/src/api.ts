@@ -132,6 +132,11 @@ export const api = {
   createSurvey: (data: any) => req("/surveys", { method: "POST", body: JSON.stringify(data) }),
   updateSurvey: (id: number, data: any) => req(`/surveys/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteSurvey: (id: number) => req(`/surveys/${id}`, { method: "DELETE" }),
+  // Save as Draft: unlike createSurvey/updateSurvey, the backend applies no
+  // completeness validation to these — a draft can be (and usually is)
+  // missing most fields. Finalizing still goes through createSurvey/updateSurvey as normal.
+  createSurveyDraft: (data: any) => req("/surveys/draft", { method: "POST", body: JSON.stringify(data) }),
+  updateSurveyDraft: (id: number, data: any) => req(`/surveys/${id}/draft`, { method: "PUT", body: JSON.stringify(data) }),
   dashboardKpis: () => req("/dashboard/kpis"),
   yieldBenchmarks: () => req("/dashboard/yield-benchmarks"),
   getPlotBoundary: (surveyId: number) => req(`/surveys/${surveyId}/plot-boundary`),

@@ -66,6 +66,47 @@ def sync_missing_columns():
                 conn.execute(text(ddl))
 
 
+def sync_nullable_columns():
+    """
+    Companion to sync_missing_columns() above: relaxes a column from NOT
+    NULL to nullable in the live database when the SQLAlchemy model has
+    made it nullable=True but the existing table still enforces NOT NULL.
+    `ALTER TABLE ... ADD COLUMN` never retroactively loosens an *existing*
+    column's constraint, and this app has no real migration tool — this
+    is what made Save-as-Draft possible without a hand-run one-off
+    migration: FarmerSurvey's many previously-mandatory columns (farmer_name,
+    village, sale_type, etc.) were flipped to nullable=True in models.py so a
+    draft can leave them blank, and this closes the gap on the DB side.
+
+    Postgres-only: SQLite's ALTER TABLE cannot drop a NOT NULL constraint at
+    all, which only matters for local dev — a local sqlite db with a stale
+    constraint should just be deleted and reseeded (disposable dev data),
+    never a concern in production, which refuses to start on SQLite anyway.
+
+    Safe to call on every startup: only alters a column that's genuinely
+    still NOT NULL when the model says otherwise, so a warm/repeat call is
+    just an inspection query.
+    """
+    from sqlalchemy import inspect, text
+
+    if engine.dialect.name != "postgresql":
+        return
+
+    inspector = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing_cols = {c["name"]: c for c in inspector.get_columns(table.name)}
+        for column in table.columns:
+            info = existing_cols.get(column.name)
+            if not info:
+                continue  # sync_missing_columns() handles a genuinely new column
+            if column.nullable and not info["nullable"]:
+                ddl = f'ALTER TABLE "{table.name}" ALTER COLUMN "{column.name}" DROP NOT NULL'
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+
+
 def migrate_roles_and_permissions():
     """
     One-time-per-deploy data fixup, safe to call on every startup (idempotent):

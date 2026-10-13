@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, Search, CheckCircle2, MapPin, Camera, Check,
   UserSearch, Handshake, LandPlot, Wheat, Coins, Warehouse,
   TriangleAlert, Sprout, Wrench, CreditCard, Landmark, Droplets, FlaskConical,
-  Truck, Smartphone, ScanLine, AlertCircle, UploadCloud, Navigation,
+  Truck, Smartphone, ScanLine, AlertCircle, UploadCloud, Navigation, Save,
 } from "lucide-react";
 import { Geolocation } from "@capacitor/geolocation";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
@@ -422,6 +422,8 @@ export default function DataEntryWizard() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
 
   const [villagesFlat, setVillagesFlat] = useState<{ village: string; taluka: string; district: string }[]>([]);
   const [villageQuery, setVillageQuery] = useState("");
@@ -891,6 +893,106 @@ export default function DataEntryWizard() {
     }
   };
 
+  // Save as Draft: deliberately bypasses getErrors/plotsValidation entirely —
+  // "incomplete" is exactly the point. Unlike submit()'s payload, blank
+  // fields are sent as null rather than coerced to 0/"" , so a half-filled
+  // number field doesn't silently turn into a fake "0" the next time this
+  // draft is reopened.
+  const saveDraft = async () => {
+    setSubmitError(null);
+    setSavingDraft(true);
+    const num = (v: any) => (v === "" || v === null || v === undefined ? null : parseFloat(v));
+    const int = (v: any) => (v === "" || v === null || v === undefined ? null : parseInt(v));
+    const includesProcessedNow = form.sale_type === "Sold processed areca" || form.sale_type === "Sold both raw and processed areca";
+    const isGradingNow = includesProcessedNow && form.grading_done === "Yes";
+    const payload: any = {
+      ...form,
+      age: int(form.age),
+      survey_year: int(form.survey_year),
+      society_since_year: int(form.society_since_year),
+      society_benefits: (form.society_benefits || []).join(","),
+      land_own_acres: num(form.land_own_acres),
+      land_leased_acres: num(form.land_leased_acres),
+      areca_area_acres: num(form.areca_area_acres),
+      areca_plant_count: int(form.areca_plant_count),
+      intercrop_crops: (form.intercrop_crops || []).join(","),
+      intercrop_area_acres: num(form.intercrop_area_acres),
+      cultivation_cost_inr: num(form.cultivation_cost_inr),
+      yield_raw_qtl: num(form.yield_raw_qtl),
+      yield_processed_qtl: num(form.yield_processed_qtl),
+      processing_cost_inr: num(form.processing_cost_inr),
+      grading_done: form.grading_done || null,
+      grading_rows: (isGradingNow && form.grading_rows?.length)
+        ? JSON.stringify(form.grading_rows.map((r: any) => ({
+            variety: r.variety, variety_other: r.variety === "Other" ? r.variety_other : "",
+            quantity_qtl: num(r.quantity_qtl), rate_inr_per_kg: num(r.rate_inr_per_kg),
+          })))
+        : null,
+      rate_inr_per_kg: num(form.rate_inr_per_kg),
+      storage_duration_months: num(form.storage_duration_months),
+      storage_loan_amount_inr: num(form.storage_loan_amount_inr),
+      storage_loan_interest_pct: num(form.storage_loan_interest_pct),
+      storage_loan_repayment_months: int(form.storage_loan_repayment_months),
+      logistics_cost_inr_per_qtl: num(form.logistics_cost_inr_per_qtl),
+      cultivation_challenges: (form.cultivation_challenges || []).join(","),
+      machinery_waiting_days: int(form.machinery_waiting_days),
+      crop2_area_acres: num(form.crop2_area_acres),
+      crop2_yield: num(form.crop2_yield),
+      crop2_rate: num(form.crop2_rate),
+      crop3_area_acres: num(form.crop3_area_acres),
+      crop3_yield: num(form.crop3_yield),
+      crop3_rate: num(form.crop3_rate),
+      mech_owned: (form.mech_owned || []).join(","),
+      mech_rented: (form.mech_rented || []).join(","),
+      mech_rental_rate_inr_hr: JSON.stringify(form.mech_rental_rate || {}),
+      mech_loan_amount_inr_lakh: num(form.mech_loan_amount_inr_lakh),
+      mech_loan_interest_pct: num(form.mech_loan_interest_pct),
+      total_household_income_inr_lakh: null,
+      non_farm_income_source: (form.non_farm_income_source || []).join(","),
+      overdraft_limit_inr_lakh: num(form.overdraft_limit_inr_lakh),
+      credit_amount_inr: num(form.credit_amount_inr),
+      credit_interest_rate_pct: num(form.credit_interest_rate_pct),
+      credit_repayment_months: int(form.credit_repayment_months),
+      credit_outstanding_inr_lakh: num(form.credit_outstanding_inr_lakh),
+      credit_gap_inr_lakh: num(form.credit_gap_inr_lakh),
+      kcc_limit_inr_lakh: num(form.kcc_limit_inr_lakh),
+      irrigation_source: (form.irrigation_source || []).join(","),
+      input_source: (form.input_source || []).join(","),
+      input_challenges: (form.input_challenges || []).join(","),
+      input_distance_km: num(form.input_distance_km),
+      input_purchase_delay_days: int(form.input_purchase_delay_days),
+      scheme_name: (form.scheme_name || []).join(","),
+      geo_lat: num(form.geo_lat),
+      geo_long: num(form.geo_long),
+      plots: plots.map((p) => ({
+        label: p.label,
+        reported_area_acres: num(p.reportedArea),
+        points: p.points && p.points.length > 0 ? p.points : null,
+        area_acres: validateBoundary(p.points).valid ? areaInAcres(p.points) : null,
+        method: p.points && p.points.length > 0 ? p.method : null,
+      })),
+    };
+    delete payload.id;
+    delete payload.entry_timestamp;
+    delete payload.total_income_inr;
+    delete payload.plot_boundary;
+    delete payload.plot_boundary_area_acres;
+    delete payload.plot_boundary_method;
+    delete payload.status;
+
+    try {
+      const saved = editId ? await api.updateSurveyDraft(Number(editId), payload) : await api.createSurveyDraft(payload);
+      if (!editId) {
+        navigate(`/entry/farmer?id=${saved.id}`, { replace: true });
+      }
+      setDraftSavedAt(new Date());
+    } catch (e: any) {
+      setSubmitError(e.message || t("Could not save draft. Check your connection and try again.", lang));
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
   const next = () => {
     const stepErrors = getErrors(form);
     // Only block on errors that belong to the tab the user is currently on —
@@ -920,7 +1022,12 @@ export default function DataEntryWizard() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-[var(--gt-purple-dark)]">{t(editId ? "Edit Farmer Survey" : "New Farmer Survey", lang)}</h1>
+        <h1 className="text-xl font-bold text-[var(--gt-purple-dark)] flex items-center gap-2">
+          {t(form.status === "draft" ? "Continue Draft Survey" : editId ? "Edit Farmer Survey" : "New Farmer Survey", lang)}
+          {form.status === "draft" && (
+            <span className="text-[11px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">{t("DRAFT", lang)}</span>
+          )}
+        </h1>
         <span className="text-xs font-medium text-[var(--gt-text-muted)] bg-[#F1EBF7] px-2.5 py-1 rounded-full whitespace-nowrap">
           {step + 1} {t("of", lang)} {STEPS.length}
         </span>
@@ -969,6 +1076,12 @@ export default function DataEntryWizard() {
       {submitError && (
         <div className="flex items-center gap-2 bg-red-50 border border-[var(--gt-danger)]/30 text-[var(--gt-danger)] text-sm rounded-lg px-3 py-2">
           <AlertCircle size={16} /> {submitError}
+        </div>
+      )}
+
+      {draftSavedAt && !submitError && (
+        <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-lg px-3 py-2">
+          <CheckCircle2 size={16} /> {t("Saved as draft at", lang)} {draftSavedAt.toLocaleTimeString()} — {t("you can safely close this and come back to it later.", lang)}
         </div>
       )}
 
@@ -1833,15 +1946,22 @@ export default function DataEntryWizard() {
         <button className="gt-btn-secondary flex items-center gap-1" onClick={back}>
           <ChevronLeft size={16} /> {t(step === 0 ? "Cancel" : "Back", lang)}
         </button>
-        {step < STEPS.length - 1 ? (
-          <button className="gt-btn-primary flex items-center gap-1" onClick={next}>
-            {t("Next", lang)} <ChevronRight size={16} />
-          </button>
-        ) : (
-          <button className="gt-btn-primary flex items-center gap-1.5" onClick={submit} disabled={submitting}>
-            <CheckCircle2 size={16} /> {t(submitting ? "Submitting…" : "Submit Survey", lang)}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {form.status !== "submitted" && (
+            <button className="gt-btn-secondary flex items-center gap-1.5" onClick={saveDraft} disabled={savingDraft || submitting}>
+              <Save size={16} /> {t(savingDraft ? "Saving…" : "Save as Draft", lang)}
+            </button>
+          )}
+          {step < STEPS.length - 1 ? (
+            <button className="gt-btn-primary flex items-center gap-1" onClick={next}>
+              {t("Next", lang)} <ChevronRight size={16} />
+            </button>
+          ) : (
+            <button className="gt-btn-primary flex items-center gap-1.5" onClick={submit} disabled={submitting}>
+              <CheckCircle2 size={16} /> {t(submitting ? "Submitting…" : "Submit Survey", lang)}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

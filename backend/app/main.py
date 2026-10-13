@@ -14,10 +14,10 @@ from sqlalchemy import func
 import datetime
 
 from .config import get_settings
-from .db import Base, engine, get_db, sync_missing_columns, migrate_roles_and_permissions
+from .db import Base, engine, get_db, sync_missing_columns, sync_nullable_columns, migrate_roles_and_permissions
 from . import models as m
 from .schemas import (
-    SurveyIn, SurveyOut, FarmerLookup, LoginIn, TokenOut, UserOut, RefreshIn, LogoutIn,
+    SurveyIn, SurveyOut, SurveyDraftIn, FarmerLookup, LoginIn, TokenOut, UserOut, RefreshIn, LogoutIn,
     ForgotPasswordIn, ResetPasswordIn, PlotBoundaryIn, PlotBoundaryOut, PlotSummaryOut,
     UserAdminOut, UserCreateIn, UserUpdateIn,
 )
@@ -36,6 +36,7 @@ from .fpo_consultation import router as fpo_consultation_router
 settings = get_settings()
 Base.metadata.create_all(bind=engine)
 sync_missing_columns()
+sync_nullable_columns()
 migrate_roles_and_permissions()
 
 app = FastAPI(title="Arecanut Farmer Data Collection API", debug=not settings.is_production)
@@ -444,7 +445,7 @@ def build_survey_query(
     credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
     input_source, input_challenges, tech_adoption, society_benefits,
     cultivation_challenges, irrigation_source, mech_owned, mech_rented,
-    sort_by, sort_dir,
+    sort_by, sort_dir, status=None,
 ):
     """Shared by GET /api/surveys and GET /api/surveys/export (CR-19) so the
     export always reflects exactly the filters/sort the list view is
@@ -452,6 +453,13 @@ def build_survey_query(
     query = db.query(m.FarmerSurvey)
     if farmer_id:
         query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
+    if status == "draft":
+        query = query.filter(m.FarmerSurvey.status == "draft")
+    elif status == "submitted":
+        # NULL means "submitted" for every row saved before Save as Draft
+        # existed — they necessarily went through the old all-or-nothing
+        # validation, so excluding NULL here would hide most real records.
+        query = query.filter((m.FarmerSurvey.status == "submitted") | (m.FarmerSurvey.status.is_(None)))
     local_vars = locals()
     for field in EXACT_FILTER_FIELDS:
         value = local_vars.get(field)
@@ -468,7 +476,34 @@ def build_survey_query(
     return query.order_by(sort_col.asc() if sort_dir == "asc" else sort_col.desc())
 
 
-@app.get("/api/surveys", response_model=list[SurveyOut])
+def serialize_plot(p: m.FarmerPlot) -> dict:
+    return {
+        "id": p.id, "label": p.label, "reported_area_acres": p.reported_area_acres,
+        "points": p.points, "area_acres": p.area_acres, "method": p.method,
+        "captured_at": p.captured_at,
+    }
+
+
+def serialize_survey(s: m.FarmerSurvey) -> dict:
+    """
+    Manual dict serialization instead of FastAPI's response_model=SurveyOut.
+    A draft row can have NULL in any of the many fields SurveyOut inherits
+    as strictly-required from SurveyIn (farmer_name, village, sale_type,
+    ...) — running it through that Pydantic model would 500 the entire
+    list/get endpoint the moment one draft exists, the exact same class of
+    bug this file already documents once for model_validators (see
+    SurveyOut's "input-only" validator overrides) but this time at the
+    field-requiredness level, which can't be overridden the same way.
+    Bypassing response_model entirely for these two read endpoints sidesteps
+    it for good, for both drafts and any future requirement change.
+    """
+    data = {c.name: getattr(s, c.name) for c in m.FarmerSurvey.__table__.columns}
+    data["status"] = s.status or "submitted"
+    data["plots"] = [serialize_plot(p) for p in s.plots]
+    return data
+
+
+@app.get("/api/surveys", response_model=None)
 def list_surveys(
     q: Optional[str] = None,
     farmer_id: Optional[str] = None,
@@ -497,6 +532,7 @@ def list_surveys(
     mech_rented: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    status: Optional[str] = Query(None, pattern="^(draft|submitted)$"),  # Save as Draft
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -508,11 +544,12 @@ def list_surveys(
         credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
         input_source, input_challenges, tech_adoption, society_benefits,
         cultivation_challenges, irrigation_source, mech_owned, mech_rented,
-        sort_by, sort_dir,
+        sort_by, sort_dir, status,
     )
     # capped result size + offset — prevents a single request from pulling the
     # entire table (OWASP API4:2023 Unrestricted Resource Consumption)
-    return query.offset(offset).limit(limit).all()
+    rows = query.offset(offset).limit(limit).all()
+    return [serialize_survey(r) for r in rows]
 
 
 @app.get("/api/surveys/export")
@@ -588,12 +625,12 @@ def export_surveys(
     )
 
 
-@app.get("/api/surveys/{survey_id}", response_model=SurveyOut)
+@app.get("/api/surveys/{survey_id}", response_model=None)
 def get_survey(survey_id: int, db: Session = Depends(get_db), user: m.User = Depends(require_permission("farmer_records"))):
     s = db.query(m.FarmerSurvey).get(survey_id)
     if not s:
         raise HTTPException(status_code=404, detail="Survey not found")
-    return s
+    return serialize_survey(s)
 
 
 def compute_income(payload: SurveyIn) -> float:
@@ -652,7 +689,7 @@ def sync_plots(db: Session, survey: m.FarmerSurvey, plots_in):
         points_json = json.dumps([pt.model_dump() for pt in p.points]) if p.points else None
         survey.plots.append(m.FarmerPlot(
             sort_order=i,
-            label=p.label,
+            label=p.label or "Plot 1",
             reported_area_acres=p.reported_area_acres,
             boundary=points_json,
             area_acres=p.area_acres,
@@ -688,6 +725,7 @@ def create_survey(
 
     data = payload.dict()
     plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
+    data["status"] = "submitted"  # a full SurveyIn payload is, by definition, a completed survey — see POST .../draft for in-progress saves
     data["total_income_inr"] = compute_income(payload)
     data["entry_timestamp"] = datetime.datetime.utcnow()
     data["created_by_user_id"] = user.id
@@ -720,9 +758,16 @@ def update_survey(
         raise HTTPException(status_code=404, detail="Survey not found")
     data = payload.dict()
     plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
+    data["status"] = "submitted"  # finalizes a draft (or no-ops if it was already submitted) — a full SurveyIn payload is always complete
     data["total_income_inr"] = compute_income(payload)
     if not data.get("farmer_id"):
-        data["farmer_id"] = survey.farmer_id  # never overwrite an assigned id with blank
+        # Preserve whatever the record already has — except a draft never
+        # had one assigned at all (farmer_id is only auto-generated on a
+        # brand-new create_survey, never on a draft save), so finalizing one
+        # via this endpoint needs the same one-time assignment create_survey
+        # would have done, or the now-"submitted" record would be stuck with
+        # no farmer_id forever.
+        data["farmer_id"] = survey.farmer_id or generate_farmer_id(db)
     if data.get("plot_boundary") and data.get("plot_boundary") != survey.plot_boundary:
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     for k, v in data.items():
@@ -732,6 +777,67 @@ def update_survey(
     db.refresh(survey)
     audit(db, request, "survey_update", user=user, resource=f"survey:{survey.id}")
     return survey
+
+
+@app.post("/api/surveys/draft", response_model=None)
+def create_survey_draft(
+    request: Request,
+    payload: SurveyDraftIn,
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("survey_entry")),
+):
+    """
+    Save as Draft: a field enumerator very often can't finish the full
+    survey in one sitting (poor connectivity mid-village, the respondent
+    gets pulled away, etc.) — this persists whatever has been filled in so
+    far with none of SurveyIn's strict requirements enforced, so it can be
+    resumed later from exactly where it was left off. Finalizing a draft
+    still goes through the existing, unchanged, fully-validated POST/PUT
+    /api/surveys — this endpoint and its PUT counterpart below only ever
+    produce status="draft" rows.
+    """
+    data = payload.dict()
+    data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17), using payload.plots below (the real pydantic objects, not the dict-ified copy)
+    data["status"] = "draft"
+    data["entry_timestamp"] = datetime.datetime.utcnow()
+    data["created_by_user_id"] = user.id
+    survey = m.FarmerSurvey(**data)
+    db.add(survey)
+    db.flush()
+    sync_plots(db, survey, payload.plots)
+    db.commit()
+    db.refresh(survey)
+    audit(db, request, "survey_draft_save", user=user, resource=f"survey:{survey.id}")
+    return serialize_survey(survey)
+
+
+@app.put("/api/surveys/{survey_id}/draft", response_model=None)
+def update_survey_draft(
+    survey_id: int,
+    request: Request,
+    payload: SurveyDraftIn,
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("survey_entry")),
+):
+    survey = db.query(m.FarmerSurvey).get(survey_id)
+    if not survey:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    if survey.status not in (None, "draft"):
+        # Never silently revert an already-submitted survey back to an
+        # incomplete-looking draft — resuming a completed record should go
+        # through the normal edit form (PUT /api/surveys/{id}), which keeps
+        # SurveyIn's full validation.
+        raise HTTPException(status_code=400, detail="This survey has already been submitted — edit it from the farmer record instead of Save as Draft.")
+    data = payload.dict()
+    data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17), using payload.plots below
+    data["status"] = "draft"
+    for k, v in data.items():
+        setattr(survey, k, v)
+    sync_plots(db, survey, payload.plots)
+    db.commit()
+    db.refresh(survey)
+    audit(db, request, "survey_draft_save", user=user, resource=f"survey:{survey.id}")
+    return serialize_survey(survey)
 
 
 @app.delete("/api/surveys/{survey_id}")

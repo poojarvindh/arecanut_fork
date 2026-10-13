@@ -172,6 +172,164 @@ class FarmerPlotOut(FarmerPlotIn):
     captured_at: Optional[datetime] = None
 
 
+class DraftPlotIn(BaseModel):
+    """Same shape as FarmerPlotIn, but a draft plot may have 0-2 boundary
+    points (still mid-walk) and no reported area yet — deliberately no
+    validators at all, since "incomplete" is the whole point of a draft."""
+    label: Optional[str] = Field(None, max_length=STR_MAX)
+    reported_area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    points: Optional[List[LatLngPoint]] = None
+    area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    method: Optional[str] = Field(None, max_length=20)
+
+
+class SurveyDraftIn(BaseModel):
+    """
+    A deliberately permissive mirror of SurveyIn used only for Save-as-Draft:
+    every field is optional and there are no format/business validators
+    (mobile-number-must-be-10-digits, areca-area-must-be-positive, yield
+    required for the selected sale type, plot boundary mandatory, etc.) —
+    "incomplete and possibly inconsistent" is exactly the state a draft is
+    allowed to be in. SurveyIn itself is left completely untouched so the
+    final "Submit Survey" path keeps its existing strict guarantees; this is
+    a separate, independent schema, not a relaxed subclass of SurveyIn.
+    """
+    farmer_id: Optional[str] = Field(None, max_length=STR_MAX)
+    farmer_name: Optional[str] = Field(None, max_length=STR_MAX)
+    mobile_no: Optional[str] = Field(None, max_length=20)
+    gender: Optional[str] = Field(None, max_length=20)
+    age: Optional[int] = Field(None, ge=0, le=150)
+    guardian_name: Optional[str] = Field(None, max_length=STR_MAX)
+    survey_year: Optional[int] = Field(None, ge=1950, le=2100)
+
+    society_assoc: Optional[str] = Field(None, max_length=10)
+    society_name: Optional[str] = Field(None, max_length=STR_MAX)
+    society_since_year: Optional[int] = Field(None, ge=1900, le=2100)
+    society_benefits: Optional[str] = Field(None, max_length=TEXT_MAX)
+    society_benefits_other: Optional[str] = Field(None, max_length=STR_MAX)
+
+    village: Optional[str] = Field(None, max_length=STR_MAX)
+    taluka: Optional[str] = Field(None, max_length=STR_MAX)
+    district: Optional[str] = Field(None, max_length=STR_MAX)
+
+    land_own_acres: Optional[float] = Field(None, ge=0, le=100000)
+    land_leased_acres: Optional[float] = Field(None, ge=0, le=100000)
+    areca_area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    areca_plant_count: Optional[int] = Field(None, ge=0, le=10_000_000)
+    organic_farming: Optional[str] = Field(None, max_length=10)
+    organic_certified: Optional[str] = Field(None, max_length=10)
+    organic_cert_applied: Optional[str] = Field(None, max_length=10)
+    organic_cert_aware: Optional[str] = Field(None, max_length=10)
+    intercropping: Optional[str] = Field(None, max_length=10)
+    intercrop_crops: Optional[str] = Field(None, max_length=TEXT_MAX)
+    intercrop_crops_other: Optional[str] = Field(None, max_length=STR_MAX)
+    intercrop_area_acres: Optional[float] = Field(None, ge=0, le=100000)
+
+    cultivation_cost_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
+    yield_raw_qtl: Optional[float] = Field(None, ge=0, le=1_000_000)
+    yield_processed_qtl: Optional[float] = Field(None, ge=0, le=1_000_000)
+
+    sale_type: Optional[str] = Field(None, max_length=50)
+    processing_cost_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
+    grading_done: Optional[str] = Field(None, max_length=10)
+    grading_rows: Optional[str] = Field(None, max_length=TEXT_MAX)
+    marketing_channel: Optional[str] = Field(None, max_length=STR_MAX)
+    marketing_channel_detail: Optional[str] = Field(None, max_length=STR_MAX)
+    rate_inr_per_kg: Optional[float] = Field(None, ge=0, le=1_000_000)
+    sale_month: Optional[str] = Field(None, max_length=20)
+
+    storage_duration_months: Optional[float] = Field(None, ge=0, le=1200)
+    storage_source: Optional[str] = Field(None, max_length=STR_MAX)
+    storage_loan_availed: Optional[str] = Field(None, max_length=10)
+    storage_loan_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
+    storage_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)
+    storage_loan_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
+    storage_warehouse_receipt: Optional[str] = Field(None, max_length=10)
+    logistics_provider: Optional[str] = Field(None, max_length=STR_MAX)
+    logistics_provider_other: Optional[str] = Field(None, max_length=STR_MAX)
+    logistics_cost_inr_per_qtl: Optional[float] = Field(None, ge=0, le=1_000_000)
+
+    cultivation_challenges: Optional[str] = Field(None, max_length=TEXT_MAX)
+    cultivation_challenges_other: Optional[str] = Field(None, max_length=STR_MAX)
+    machinery_waiting_days: Optional[int] = Field(None, ge=0, le=3650)
+
+    crop2_name: Optional[str] = Field(None, max_length=STR_MAX)
+    crop2_area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    crop2_yield: Optional[float] = Field(None, ge=0, le=1_000_000)
+    crop2_rate: Optional[float] = Field(None, ge=0, le=1_000_000)
+    crop3_name: Optional[str] = Field(None, max_length=STR_MAX)
+    crop3_area_acres: Optional[float] = Field(None, ge=0, le=100000)
+    crop3_yield: Optional[float] = Field(None, ge=0, le=1_000_000)
+    crop3_rate: Optional[float] = Field(None, ge=0, le=1_000_000)
+
+    mech_owned: Optional[str] = Field(None, max_length=TEXT_MAX)
+    mech_owned_other: Optional[str] = Field(None, max_length=STR_MAX)
+    mech_rented: Optional[str] = Field(None, max_length=TEXT_MAX)
+    mech_rented_other: Optional[str] = Field(None, max_length=STR_MAX)
+    mech_rental_rate_inr_hr: Optional[str] = Field(None, max_length=TEXT_MAX)
+    mech_financed: Optional[str] = Field(None, max_length=10)
+    mech_loan_amount_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
+    mech_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)
+
+    total_household_income_inr_lakh: Optional[float] = Field(None, ge=0, le=1_000_000)
+    total_household_income_bracket: Optional[str] = Field(None, max_length=20)
+    non_farm_income_source: Optional[str] = Field(None, max_length=TEXT_MAX)
+    non_farm_income_source_other: Optional[str] = Field(None, max_length=STR_MAX)
+    bank_account: Optional[str] = Field(None, max_length=10)
+    overdraft_facility: Optional[str] = Field(None, max_length=10)
+    overdraft_limit_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
+
+    credit_linkage: Optional[str] = Field(None, max_length=10)
+    credit_source: Optional[str] = Field(None, max_length=STR_MAX)
+    credit_source_other: Optional[str] = Field(None, max_length=STR_MAX)
+    credit_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
+    credit_interest_rate_pct: Optional[float] = Field(None, ge=0, le=20)
+    credit_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
+    credit_outstanding_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
+    loan_application_outcome: Optional[str] = Field(None, max_length=STR_MAX)
+    loan_rejection_reason: Optional[str] = Field(None, max_length=STR_MAX)
+    loan_rejection_reason_other: Optional[str] = Field(None, max_length=STR_MAX)
+    credit_gap_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
+
+    scheme_availed: Optional[str] = Field(None, max_length=10)
+    scheme_name: Optional[str] = Field(None, max_length=TEXT_MAX)
+    scheme_benefits: Optional[str] = Field(None, max_length=TEXT_MAX)
+
+    irrigation_source: Optional[str] = Field(None, max_length=TEXT_MAX)
+    irrigation_challenges: Optional[str] = Field(None, max_length=TEXT_MAX)
+
+    soil_test_done: Optional[str] = Field(None, max_length=10)
+    crop_insurance: Optional[str] = Field(None, max_length=10)
+    crop_insurance_detail: Optional[str] = Field(None, max_length=TEXT_MAX)
+    natural_calamity_5yr: Optional[str] = Field(None, max_length=10)
+
+    input_source: Optional[str] = Field(None, max_length=TEXT_MAX)
+    input_source_other: Optional[str] = Field(None, max_length=STR_MAX)
+    input_distance_km: Optional[float] = Field(None, ge=0, le=100000)
+    input_challenges: Optional[str] = Field(None, max_length=TEXT_MAX)
+    input_challenges_other: Optional[str] = Field(None, max_length=STR_MAX)
+    input_purchase_delay_days: Optional[int] = Field(None, ge=0, le=3650)
+
+    tech_adoption: Optional[str] = Field(None, max_length=10)
+    tech_adoption_detail: Optional[str] = Field(None, max_length=TEXT_MAX)
+
+    kcc_account: Optional[str] = Field(None, max_length=10)
+    kcc_limit_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
+
+    mobile_verified: Optional[bool] = False
+
+    geo_lat: Optional[float] = Field(None, ge=-90, le=90)
+    geo_long: Optional[float] = Field(None, ge=-180, le=180)
+    field_photo: Optional[str] = Field(None, max_length=6_000_000)
+    client_uuid: Optional[str] = Field(None, max_length=100)
+
+    plot_boundary: Optional[str] = Field(None, max_length=TEXT_MAX)
+    plot_boundary_area_acres: Optional[float] = Field(None, ge=0, le=1_000_000)
+    plot_boundary_method: Optional[str] = Field(None, max_length=20)
+
+    plots: Optional[List[DraftPlotIn]] = None
+
+
 class SurveyIn(BaseModel):
     # Optional at the API layer: a brand-new farmer's id is auto-generated
     # server-side once the whole survey validates (see create_survey in
@@ -444,6 +602,7 @@ class SurveyOut(SurveyIn):
     plot_boundary_method: Optional[str] = None
     plot_boundary_captured_at: Optional[datetime] = None
     plots: List[FarmerPlotOut] = Field(default_factory=list)  # CR-17
+    status: Optional[str] = "submitted"  # "draft" | "submitted" — Save as Draft
 
     # These two rules are intentionally input-only (create/update): they enforce
     # requirements for new/edited data, but records saved before a requirement
