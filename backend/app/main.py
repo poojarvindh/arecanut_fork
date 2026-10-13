@@ -639,9 +639,12 @@ def compute_income(payload: SurveyIn) -> float:
     is_grading = includes_processed and payload.grading_done == "Yes"
     gross = 0.0
     if is_grading:
-        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket rate.
+        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket
+        # rate. That per-row rate is INR/Quintal (not INR/Kg like the blanket rate
+        # below), and quantity_qtl is already in quintals, so no kg->quintal *100
+        # conversion is needed here.
         rows = json.loads(payload.grading_rows) if payload.grading_rows else []
-        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) * 100 for r in rows)
+        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) for r in rows)
         if includes_raw:
             gross += (payload.yield_raw_qtl or 0) * (payload.rate_inr_per_kg or 0) * 100
     else:

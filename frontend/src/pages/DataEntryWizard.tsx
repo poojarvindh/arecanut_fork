@@ -612,7 +612,9 @@ export default function DataEntryWizard() {
     const p = includesProcessed ? (parseFloat(form.processing_cost_inr) || 0) : 0;
     let gross = 0;
     if (isGrading) {
-      gross += (form.grading_rows || []).reduce((sum: number, row: any) => sum + (parseFloat(row.quantity_qtl) || 0) * (parseFloat(row.rate_inr_per_kg) || 0) * 100, 0);
+      // Grading-row rate is INR/Quintal (not INR/Kg like the blanket rate below), and
+      // quantity_qtl is already in quintals — no *100 kg-to-quintal conversion needed here.
+      gross += (form.grading_rows || []).reduce((sum: number, row: any) => sum + (parseFloat(row.quantity_qtl) || 0) * (parseFloat(row.rate_inr_per_kg) || 0), 0);
       if (includesRaw) gross += (parseFloat(form.yield_raw_qtl) || 0) * (parseFloat(form.rate_inr_per_kg) || 0) * 100;
     } else {
       const y = (includesRaw ? parseFloat(form.yield_raw_qtl) || 0 : 0) + (includesProcessed ? parseFloat(form.yield_processed_qtl) || 0 : 0);
@@ -1426,7 +1428,7 @@ export default function DataEntryWizard() {
                             )}
                           </div>
                           <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Quantity (Qtl)", lang)} value={row.quantity_qtl} onChange={(e) => updateGradingRow(idx, "quantity_qtl", e.target.value.replace(/^-+/, ""))} />
-                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Rate (INR/kg)", lang)} value={row.rate_inr_per_kg} onChange={(e) => updateGradingRow(idx, "rate_inr_per_kg", e.target.value.replace(/^-+/, ""))} />
+                          <input type="number" min="0" step="0.01" className="gt-input" placeholder={t("Rate (INR/Quintal)", lang)} value={row.rate_inr_per_kg} onChange={(e) => updateGradingRow(idx, "rate_inr_per_kg", e.target.value.replace(/^-+/, ""))} />
                           <button type="button" onClick={() => removeGradingRow(idx)} className="gt-input px-3 text-red-600">×</button>
                         </div>
                       ))}
