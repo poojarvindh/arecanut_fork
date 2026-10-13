@@ -271,7 +271,7 @@ function getErrors(form: any): Record<string, string> {
     if (isBlank(form.credit_amount_inr)) e.credit_amount_inr = "Loan amount is required.";
     else if (hasMoreThanTwoDecimals(form.credit_amount_inr)) e.credit_amount_inr = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Interest rate is required.";
-    else if (Number(form.credit_interest_rate_pct) < 0 || Number(form.credit_interest_rate_pct) > 20) e.credit_interest_rate_pct = "Enter a value between 0 and 20.";
+    else if (Number(form.credit_interest_rate_pct) < 0 || Number(form.credit_interest_rate_pct) > 50) e.credit_interest_rate_pct = "Enter a value between 0 and 50.";
     else if (hasMoreThanTwoDecimals(form.credit_interest_rate_pct)) e.credit_interest_rate_pct = "Maximum 2 decimal places."; // CR-01
     if (isBlank(form.credit_repayment_months)) e.credit_repayment_months = "Repayment period is required.";
     else if (!isWholeNumber(form.credit_repayment_months)) e.credit_repayment_months = "Whole numbers only — no decimals."; // CR-11
@@ -317,9 +317,9 @@ function getErrors(form: any): Record<string, string> {
     if (!e[f] && !isBlank(form[f]) && Number(form[f]) < 0) e[f] = "Cannot be negative.";
   });
 
-  // Interest rates: capped at 20% per annum per client-specified upper bound.
+  // Interest rates: capped at 50% per annum per client-specified upper bound.
   ["storage_loan_interest_pct", "mech_loan_interest_pct", "credit_interest_rate_pct"].forEach((f) => {
-    if (!e[f] && !isBlank(form[f]) && Number(form[f]) > 20) e[f] = "Cannot exceed 20% per annum.";
+    if (!e[f] && !isBlank(form[f]) && Number(form[f]) > 50) e[f] = "Cannot exceed 50% per annum.";
   });
   // Absolute INR amounts: capped at ₹10 crore per client-specified upper bound.
   ["cultivation_cost_inr", "processing_cost_inr", "storage_loan_amount_inr", "credit_amount_inr"].forEach((f) => {
@@ -1469,7 +1469,7 @@ export default function DataEntryWizard() {
                 {form.storage_source && form.storage_loan_availed === "Yes" && (
                   <>
                     <Field label="Loan/Pledge Amount (INR)" required error={errors.storage_loan_amount_inr} hint="Required because a commodity/warehouse loan or pledge is being availed"><input max="100000000" type="number" className="gt-input" value={form.storage_loan_amount_inr} onChange={(e) => setNonNeg("storage_loan_amount_inr", e.target.value)} /></Field>
-                    <Field label="Interest Rate (% per annum)" required error={errors.storage_loan_interest_pct} hint="Required because a commodity/warehouse loan or pledge is being availed"><input type="number" max="20" className="gt-input" value={form.storage_loan_interest_pct} onChange={(e) => setNonNeg("storage_loan_interest_pct", e.target.value)} /></Field>
+                    <Field label="Interest Rate (% per annum)" required error={errors.storage_loan_interest_pct} hint="Required because a commodity/warehouse loan or pledge is being availed"><input type="number" max="50" className="gt-input" value={form.storage_loan_interest_pct} onChange={(e) => setNonNeg("storage_loan_interest_pct", e.target.value)} /></Field>
                     <Field label="Repayment Period (Months)" required error={errors.storage_loan_repayment_months} hint="Required because a commodity/warehouse loan or pledge is being availed"><input type="number" className="gt-input" value={form.storage_loan_repayment_months} onChange={(e) => setNonNeg("storage_loan_repayment_months", e.target.value)} /></Field>
                     {form.storage_source.includes("Warehouse") && (
                       <Field label="Is a Warehouse Receipt Available?"><YesNo value={form.storage_warehouse_receipt} onChange={(v) => set("storage_warehouse_receipt", v)} /></Field>
@@ -1573,7 +1573,7 @@ export default function DataEntryWizard() {
               {form.mech_owned.length > 0 && form.mech_financed === "Yes" && (
                 <div className="grid md:grid-cols-2 gap-x-4">
                   <Field label="Loan Amount (INR Lakh)" required error={errors.mech_loan_amount_inr_lakh} hint="Required because the machines are financed"><input max="1000" type="number" className="gt-input" value={form.mech_loan_amount_inr_lakh} onChange={(e) => setNonNeg("mech_loan_amount_inr_lakh", e.target.value)} /></Field>
-                  <Field label="Interest Rate (% per annum)" required error={errors.mech_loan_interest_pct} hint="Required because the machines are financed"><input type="number" max="20" className="gt-input" value={form.mech_loan_interest_pct} onChange={(e) => setNonNeg("mech_loan_interest_pct", e.target.value)} /></Field>
+                  <Field label="Interest Rate (% per annum)" required error={errors.mech_loan_interest_pct} hint="Required because the machines are financed"><input type="number" max="50" className="gt-input" value={form.mech_loan_interest_pct} onChange={(e) => setNonNeg("mech_loan_interest_pct", e.target.value)} /></Field>
                 </div>
               )}
             </SubSection>
@@ -1667,7 +1667,7 @@ export default function DataEntryWizard() {
                       </Field>
                     )}
                     <Field label="Amount (INR)" required error={errors.credit_amount_inr} hint="Required because Credit Linkage = Yes"><input max="100000000" step="0.01" type="number" className="gt-input" value={form.credit_amount_inr} onChange={(e) => setNonNeg("credit_amount_inr", e.target.value)} /></Field>
-                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="20" step="0.01" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
+                    <Field label="Interest Rate (% per annum)" required error={errors.credit_interest_rate_pct} hint="Required because Credit Linkage = Yes"><input type="number" max="50" step="0.01" className="gt-input" value={form.credit_interest_rate_pct} onChange={(e) => setNonNeg("credit_interest_rate_pct", e.target.value)} /></Field>
                     <Field label="Repayment Period (Months)" required error={errors.credit_repayment_months} hint="Required because Credit Linkage = Yes"><input type="number" step="1" className="gt-input" value={form.credit_repayment_months} onChange={(e) => setNonNeg("credit_repayment_months", e.target.value)} /></Field>
                     <Field label="Current Outstanding Loan Amount (INR Lakh)" error={errors.credit_outstanding_inr_lakh}><input max="1000" step="0.01" type="number" className="gt-input" value={form.credit_outstanding_inr_lakh} onChange={(e) => setNonNeg("credit_outstanding_inr_lakh", e.target.value)} /></Field>
                   </>

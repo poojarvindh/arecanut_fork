@@ -242,7 +242,7 @@ class SurveyDraftIn(BaseModel):
     storage_source: Optional[str] = Field(None, max_length=STR_MAX)
     storage_loan_availed: Optional[str] = Field(None, max_length=10)
     storage_loan_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
-    storage_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)
+    storage_loan_interest_pct: Optional[float] = Field(None, ge=0, le=50)
     storage_loan_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
     storage_warehouse_receipt: Optional[str] = Field(None, max_length=10)
     logistics_provider: Optional[str] = Field(None, max_length=STR_MAX)
@@ -269,7 +269,7 @@ class SurveyDraftIn(BaseModel):
     mech_rental_rate_inr_hr: Optional[str] = Field(None, max_length=TEXT_MAX)
     mech_financed: Optional[str] = Field(None, max_length=10)
     mech_loan_amount_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
-    mech_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)
+    mech_loan_interest_pct: Optional[float] = Field(None, ge=0, le=50)
 
     total_household_income_inr_lakh: Optional[float] = Field(None, ge=0, le=1_000_000)
     total_household_income_bracket: Optional[str] = Field(None, max_length=20)
@@ -283,7 +283,7 @@ class SurveyDraftIn(BaseModel):
     credit_source: Optional[str] = Field(None, max_length=STR_MAX)
     credit_source_other: Optional[str] = Field(None, max_length=STR_MAX)
     credit_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)
-    credit_interest_rate_pct: Optional[float] = Field(None, ge=0, le=20)
+    credit_interest_rate_pct: Optional[float] = Field(None, ge=0, le=50)
     credit_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
     credit_outstanding_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)
     loan_application_outcome: Optional[str] = Field(None, max_length=STR_MAX)
@@ -383,7 +383,7 @@ class SurveyIn(BaseModel):
     storage_source: Optional[str] = Field(None, max_length=STR_MAX)
     storage_loan_availed: Optional[str] = Field(None, max_length=10)
     storage_loan_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)  # capped at INR 10 crore
-    storage_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)  # capped at 20% per annum
+    storage_loan_interest_pct: Optional[float] = Field(None, ge=0, le=50)  # capped at 50% per annum
     storage_loan_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
     storage_warehouse_receipt: Optional[str] = Field(None, max_length=10)
     logistics_provider: Optional[str] = Field(None, max_length=STR_MAX)
@@ -410,7 +410,7 @@ class SurveyIn(BaseModel):
     mech_rental_rate_inr_hr: Optional[str] = Field(None, max_length=TEXT_MAX)
     mech_financed: Optional[str] = Field(None, max_length=10)
     mech_loan_amount_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)  # capped at INR 10 crore (1000 lakh)
-    mech_loan_interest_pct: Optional[float] = Field(None, ge=0, le=20)  # capped at 20% per annum
+    mech_loan_interest_pct: Optional[float] = Field(None, ge=0, le=50)  # capped at 50% per annum
 
     total_household_income_inr_lakh: Optional[float] = Field(None, ge=0, le=1_000_000)  # legacy, superseded by bracket
     total_household_income_bracket: Optional[str] = Field(None, max_length=20)
@@ -424,7 +424,7 @@ class SurveyIn(BaseModel):
     credit_source: Optional[str] = Field(None, max_length=STR_MAX)
     credit_source_other: Optional[str] = Field(None, max_length=STR_MAX)
     credit_amount_inr: Optional[float] = Field(None, ge=0, le=100_000_000)  # capped at INR 10 crore
-    credit_interest_rate_pct: Optional[float] = Field(None, ge=0, le=20)  # capped at 20% per annum
+    credit_interest_rate_pct: Optional[float] = Field(None, ge=0, le=50)  # capped at 50% per annum
     credit_repayment_months: Optional[int] = Field(None, ge=0, le=1200)
     credit_outstanding_inr_lakh: Optional[float] = Field(None, ge=0, le=1000)  # capped at INR 10 crore (1000 lakh)
     loan_application_outcome: Optional[str] = Field(None, max_length=STR_MAX)
