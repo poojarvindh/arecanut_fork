@@ -11,12 +11,14 @@ re-deriving context.
 
 ## 1. Architecture Overview
 
-- **Backend**: FastAPI (Python), deployed as a Vercel serverless function.
+- **Backend**: FastAPI (Python). **As of 2026-10-13, the real/current production backend is an Azure Container App — confirmed by the user, not Vercel.**
   - Repo path: `backend/`
-  - Vercel project: `arecanut-backend` (org `shwetankgt-6475s-projects`, project id `prj_qvzGni83U8yz2VphYd8mIXI7dsnE`)
-  - Live URL: `https://arecanut-backend.vercel.app`
-  - Database: Neon Postgres (serverless), connected via `DATABASE_URL` env var on Vercel.
-  - Auth: JWT access + rotating hashed refresh tokens, bcrypt password hashing, account lockout, audit log.
+  - **Live URL (current, Azure)**: `https://arecanut.orangebeach-de98094e.centralindia.azurecontainerapps.io` (API base `.../api`) — this is what `frontend/.env`'s `VITE_API_BASE` points at, and what every APK build from v7.0 onward is built against.
+  - **This Azure container app can be stopped/scaled to zero** — a stopped container returns Azure's own platform error page ("This Container App is stopped or does not exist", plain HTML, not a JSON error) for every route including `/docs`. Seeing that exact page means the container needs restarting in Azure Portal; it is not a code or deploy bug. Confirmed stopped once (2026-10-13) and restarted by the user before an APK build.
+  - **How the Azure deployment is actually built/pushed is not documented anywhere in this repo** — no Dockerfile, CI workflow, or Azure config file is checked in, and no session so far has performed or observed an Azure deploy. Whoever set this up (the user, or a session with no record here) did so outside this repo's visibility. **Ask the user for the actual deploy process before attempting to redeploy the backend** — do not guess at `az` CLI commands or assume a GitHub Actions-to-Azure pipeline exists.
+  - **Legacy/previous backend (Vercel, pre-2026-10-13)**: `arecanut-backend` Vercel project (org `shwetankgt-6475s-projects`, project id `prj_qvzGni83U8yz2VphYd8mIXI7dsnE`), live URL `https://arecanut-backend.vercel.app`. This was the documented production backend through the 2026-10-08 CR-01..CR-20 deploy and is still a valid, working deployment target (the "Deploying to production" commands below still work for it) — but it is **not** where the live app's traffic goes as of this writing. Kept here in case Azure is ever rolled back or abandoned.
+  - Database: whichever Postgres the live Azure container's `DATABASE_URL` env var points at — **not confirmed to still be the same Neon instance** the Vercel deployment used; don't assume without checking.
+  - Auth: JWT access + rotating hashed refresh tokens, bcrypt password hashing, account lockout, audit log (unchanged regardless of hosting target — this is app code, not infra).
 - **Frontend**: React 19 + Vite + Tailwind v4, PWA-enabled (offline queue via IndexedDB).
   - Repo path: `frontend/`
   - Vercel project: `arecanut-frontend` (project id `prj_iEZARjJW3nuBseUeg4wbuWdGCz5j`)
@@ -26,18 +28,19 @@ re-deriving context.
   - Repo path: `frontend/android/`
   - Package: `com.gtbharat.arecanutsurvey`
   - Signing keystore: `keystore/arecanut-release.jks` (already existed before this file was created; keep `frontend/android/keystore.properties` in sync).
-  - **Every APK build must**: (1) bump `versionCode`/`versionName` in `frontend/android/app/build.gradle`, (2) rebuild the web bundle with production env vars, (3) `npx cap sync android`, (4) `./gradlew.bat assembleRelease` with JDK 21, (5) verify with `apksigner verify`.
-- **Git**: `D:\CLAUD\arecanut-app` is a git repo, remote `https://github.com/shwetankgt-design/arecanut.git`, branch `main`. Auto-deploy from GitHub is configured on Vercel, but **most work this session was deployed directly via `vercel --prod` from the local working tree**, not via git push — so local working tree state may be ahead of the last git commit. Check `git status` / `git log` before assuming git reflects reality.
+  - **Every APK build must**: (1) bump `versionCode`/`versionName` in `frontend/android/app/build.gradle`, (2) rebuild the web bundle with production env vars (as of v7.0, this just means a plain `vite build` — `frontend/.env`'s `VITE_API_BASE` already points at the live Azure backend, no override needed unless that changes again), (3) `npx cap sync android`, (4) `./gradlew.bat assembleRelease` with JDK 21, (5) verify with `apksigner verify`.
+- **Git**: `D:\CLAUD\arecanut-app` is a git repo, remote `https://github.com/shwetankgt-design/arecanut.git`, branch `main`. Auto-deploy from GitHub is configured on the **frontend's** Vercel project, but **most work has been committed/pushed directly rather than relying on that** — check `git status` / `git log` / `git log origin/main..main` before assuming git reflects reality, and before assuming anything has actually been redeployed anywhere.
 
-### Deploying to production (both projects)
+### Deploying to production
+**Backend (Azure) — process not documented, ask the user.** The commands below redeploy the *frontend* (still Vercel) and the *legacy backend* (also still Vercel, but not where live traffic goes as of 2026-10-13 — see above). There is currently no known-safe way to redeploy the Azure backend from this repo or this session; don't attempt one without the user walking through it first.
 ```bash
-# Backend
-cd D:\CLAUD\arecanut-app
-VERCEL_ORG_ID=team_KGHELcz7BAh5sHUPab02EX6P VERCEL_PROJECT_ID=prj_qvzGni83U8yz2VphYd8mIXI7dsnE vercel --prod --yes
-
-# Frontend (rebuild first if env vars matter for the build)
+# Frontend (Vercel) — rebuild first if env vars matter for the build
 cd D:\CLAUD\arecanut-app
 VERCEL_ORG_ID=team_KGHELcz7BAh5sHUPab02EX6P VERCEL_PROJECT_ID=prj_iEZARjJW3nuBseUeg4wbuWdGCz5j vercel --prod --yes
+
+# Legacy backend (Vercel) — kept working in case Azure is ever rolled back; NOT the live backend
+cd D:\CLAUD\arecanut-app
+VERCEL_ORG_ID=team_KGHELcz7BAh5sHUPab02EX6P VERCEL_PROJECT_ID=prj_qvzGni83U8yz2VphYd8mIXI7dsnE vercel --prod --yes
 ```
 Both commands must be run from the **repo root** (`D:\CLAUD\arecanut-app`), not from `backend/` or `frontend/` — each Vercel project has "Root Directory" set to its subfolder, and running from inside that subfolder makes the CLI look for a nested copy of itself and fail.
 
@@ -46,7 +49,8 @@ Both commands must be run from the **repo root** (`D:\CLAUD\arecanut-app`), not 
 - Any one-off Python script that touches the DB **must `import app.main` first** (not just `from app.db import ...`), because SQLAlchemy models only register onto `Base.metadata` as an import side-effect of `app/models.py`, which `app/main.py` imports. A script that skips this will silently no-op against an empty metadata set (produces a false "nothing to do" result).
 - `Base.metadata.create_all()` never alters existing tables — it only creates missing tables. New columns added to a model need `sync_missing_columns()` (in `app/db.py`, called on every `app.main` startup) to actually appear in an existing live database. This is why it's safe to add new nullable columns to `FarmerSurvey`/etc. without a real migration tool — but it means schema changes are additive/nullable-only unless a real migration is written.
 - **Postgres sequence desync**: the original seed script bulk-inserted `District`/`Taluka`/`Village`/`Society` rows with explicit Python-assigned ids, which never advances Postgres's own auto-increment sequence. Any future ordinary `INSERT` (not `bulk_insert_mappings` with explicit ids) into these tables in production will collide on `id` unless the sequence is first resynced: `SELECT setval(pg_get_serial_sequence('<table>', 'id'), COALESCE((SELECT MAX(id) FROM <table>), 1))`.
-- **Vercel CLI transient failures**: `vercel --prod` occasionally fails with `fetch failed` or `ENOENT ...db-journal` mid-upload — these are transient; just retry the exact same command.
+- **Vercel CLI transient failures**: `vercel --prod` (frontend or the legacy backend) occasionally fails with `fetch failed` or `ENOENT ...db-journal` mid-upload — these are transient; just retry the exact same command.
+- **Azure Container App "stopped" page looks nothing like an app error**: if `https://arecanut.orangebeach-de98094e.centralindia.azurecontainerapps.io/*` (any path, including `/docs`) returns a plain HTML page titled "Azure Container App - Unavailable" / "Error 404 - This Container App is stopped or does not exist", the container is scaled down or stopped — this is Azure's own platform response, not a FastAPI 404 and not a code bug. Ask the user to restart it in Azure Portal, then re-check before debugging further.
 - **Pydantic validator inheritance trap**: `SurveyOut(SurveyIn)` inherits ALL of `SurveyIn`'s `@model_validator`s, including ones that should only apply to *input* (e.g. "plot boundary is mandatory"). If a new mandatory-field validator is added to `SurveyIn`, it will also run when serializing existing DB rows for `GET` responses — and any pre-existing row that doesn't satisfy the new rule will make the *entire list endpoint 500*. This exact bug shipped once (see Session Log, "Farmer Records not visible" root cause) and was fixed by redefining the same-named validator as a no-op inside `SurveyOut` to override it. **Any new mandatory `model_validator` added to `SurveyIn` going forward must be checked against this trap** — either make it genuinely safe for old rows, or explicitly neutralize it in `SurveyOut`.
 - **One-off production data migrations** (e.g. importing the real FPC-Taluka mapping) were done by temporarily adding an admin-only POST endpoint to `main.py`, calling it once via curl with an admin JWT, then **removing the endpoint and redeploying clean**. Never leave such an endpoint in production. If you find one in the code, either it's mid-migration (finish it) or it was missed during cleanup (remove it).
 - **Recharts `<Pie>` gotchas** (found while fixing the dashboard pie-chart bug): (1) a `label` prop given as a function MUST return a positioned SVG element (Recharts' own documented pattern: use `cx`/`cy`/`midAngle`/`innerRadius`/`outerRadius` from the callback's props to compute `x`/`y`, wrap in `<text>`) — returning a bare string renders **nothing at all**, not just a missing label, the whole Pie's sectors disappear too. (2) Recharts' Pie entrance animation can get stuck and never complete in constrained/headless browser environments, which independently also blocks all rendering — `isAnimationActive={false}` on the `<Pie>` fixes it and is a reasonable permanent choice for a data dashboard (no need for entrance animation on load). Both issues stack; a Pie chart that renders nothing could be either or both — check with browser DevTools/DOM inspection (`svg.querySelectorAll('path').length`) rather than assuming it's a data problem.
