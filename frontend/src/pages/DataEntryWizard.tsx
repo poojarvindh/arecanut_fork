@@ -690,13 +690,15 @@ export default function DataEntryWizard() {
     });
   };
 
-  // At least one plot needs a captured, valid boundary before submit — the
-  // same mandatory-geo-tag rule as before, just across the set of plots
-  // instead of a single field. Reported area is required on every plot
-  // (enforced in getErrors-style validation at submit time, see `submit`).
+  // Geo-tagging (plot boundary capture) made non-mandatory for now, per
+  // explicit request — a survey can submit with no plot boundary captured
+  // at all. Still validates the *shape* of whatever boundary is attempted
+  // (a plot with 1-2 points is an in-progress/invalid walk, not a valid
+  // "skip it" state) and still requires reported area on every plot, since
+  // that's basic data entry, not geo-tagging. Revert to requiring
+  // `plots.some((p) => validateBoundary(p.points).valid)` if this needs to
+  // become mandatory again.
   const plotsValidation = useMemo(() => {
-    const anyValidBoundary = plots.some((p) => validateBoundary(p.points).valid);
-    if (!anyValidBoundary) return { valid: false, error: "At least one plot needs a captured boundary — walk/draw/upload at least 3 points." };
     const badBoundary = plots.find((p) => p.points.length > 0 && !validateBoundary(p.points).valid);
     if (badBoundary) return { valid: false, error: validateBoundary(badBoundary.points).error };
     const missingArea = plots.find((p) => isBlank(p.reportedArea) || Number(p.reportedArea) <= 0);
@@ -789,7 +791,7 @@ export default function DataEntryWizard() {
     }
     if (!plotsValidation.valid) {
       setStep(STEPS.length - 1);
-      setSubmitError(plotsValidation.error || t("Plot boundary is mandatory — capture it via Draw on Map, Excel upload, or GPS walk before submitting.", lang));
+      setSubmitError(plotsValidation.error || t("Please fix the plot details before submitting.", lang));
       return;
     }
 
@@ -1851,7 +1853,7 @@ export default function DataEntryWizard() {
                 <button type="button" onClick={addPlot} className="text-sm text-[var(--gt-purple-dark)] font-medium">+ {t("Add Plot", lang)}</button>
               </div>
               <p className="text-xs text-[var(--gt-text-muted)] mb-3">
-                {t("A farmer may hold more than one plot, including in different locations. Add one entry per plot — each needs a reported area; at least one across the whole set needs a GPS-measured boundary (draw on map, upload Excel/CSV, or walk with the device GPS). This is required before the survey can be submitted and can still be edited later from the farmer's record.", lang)}
+                {t("A farmer may hold more than one plot, including in different locations. Add one entry per plot — each needs a reported area. Capturing a GPS-measured boundary (draw on map, upload Excel/CSV, or walk with the device GPS) is optional for now and can be added later from the farmer's record.", lang)}
               </p>
 
               <div className="space-y-4">

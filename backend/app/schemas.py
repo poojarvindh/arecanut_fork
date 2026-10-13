@@ -571,23 +571,26 @@ class SurveyIn(BaseModel):
 
     @model_validator(mode="after")
     def plot_boundary_required(self):
-        # CR-17: a survey using the new multi-plot flow (plots is not None)
-        # is validated by at-least-one-plot-has-a-boundary instead of the
-        # single legacy field — every plot still needs a reported area
-        # (enforced by FarmerPlotIn itself), but the boundary walk/draw/upload
-        # is only mandatory somewhere across the set, not on every plot.
+        # Geo-tagging (plot boundary capture) made non-mandatory for now, per
+        # explicit request — a survey can submit with zero plots / no boundary
+        # captured on any of them. Still validates the *shape* of whatever is
+        # provided (each plot's own boundary, if given, still needs >=3 points
+        # — that's enforced by FarmerPlotIn/the legacy JSON parse below, not
+        # here); this validator just no longer requires it to exist at all.
+        # Revert to the CR-17 commit this replaced if geo-tagging needs to be
+        # made mandatory again.
         if self.plots is not None:
-            if len(self.plots) == 0:
-                raise ValueError("at least one plot is required")
-            if not any(p.points and len(p.points) >= 3 for p in self.plots):
-                raise ValueError("at least one plot needs a captured boundary — capture at least 3 points via Draw on Map, Excel upload, or GPS walk")
+            for p in self.plots:
+                if p.points is not None and len(p.points) < 3:
+                    raise ValueError(f"{p.label or 'a plot'}'s boundary needs at least 3 points if captured at all")
             return self
-        try:
-            points = json.loads(self.plot_boundary) if self.plot_boundary else []
-        except (ValueError, TypeError):
-            points = []
-        if not isinstance(points, list) or len(points) < 3:
-            raise ValueError("plot_boundary is mandatory — capture at least 3 points via Draw on Map, Excel upload, or GPS walk")
+        if self.plot_boundary:
+            try:
+                points = json.loads(self.plot_boundary)
+            except (ValueError, TypeError):
+                points = []
+            if not isinstance(points, list) or len(points) < 3:
+                raise ValueError("plot_boundary needs at least 3 points if captured at all")
         return self
 
 
