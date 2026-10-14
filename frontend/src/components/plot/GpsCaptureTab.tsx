@@ -29,12 +29,18 @@ const TARGET_ACCURACY_M = 6;
 const WARN_ACCURACY_M = 20; // accepted, but flagged — canopy/urban-canyon conditions can genuinely not do better than this
 
 // Continuous "walk the perimeter" track mode: a point is only kept once the
-// walker has moved at least MIN_STEP_METERS from the last kept point (GPS
-// jitter while standing still would otherwise flood the polygon with noise
-// right on top of itself), and any single reading noisier than
+// walker has moved at least the chosen step distance from the last kept
+// point (GPS jitter while standing still would otherwise flood the polygon
+// with noise right on top of itself), and any single reading noisier than
 // MAX_TRACK_ACCURACY_M is dropped outright rather than letting one bad
-// moment put a spike in the boundary.
-const MIN_STEP_METERS = 4;
+// moment put a spike in the boundary. The step distance is user-selectable
+// (not a fixed constant) because a small plot wants a fine spacing for
+// shape accuracy, while a large (2+ acre) farm's perimeter is long enough
+// that a fine spacing would mean thousands of points and a much longer
+// walk — a wider spacing keeps the point count and capture time reasonable
+// without materially hurting the area calculation for a bigger boundary.
+const STEP_OPTIONS_M = [5, 10, 15, 25, 30, 50];
+const DEFAULT_STEP_M = 5;
 const MAX_TRACK_ACCURACY_M = 25;
 
 // Genuinely shared across web and the Capacitor Android app — @capacitor/geolocation
@@ -58,6 +64,7 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   const [tracking, setTracking] = useState(false);
   const [trackPoints, setTrackPoints] = useState<PlotBoundary>([]);
   const [trackSkipped, setTrackSkipped] = useState(0); // readings dropped for being too noisy — surfaced so a user in bad-signal terrain understands why progress looks slow
+  const [stepMeters, setStepMeters] = useState(DEFAULT_STEP_M);
   const trackWatchIdRef = useRef<string | null>(null);
   const lastKeptRef = useRef<LatLngPoint | null>(null);
 
@@ -185,7 +192,7 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
             return;
           }
           const point: LatLngPoint = { lat: latitude, lng: longitude };
-          if (lastKeptRef.current && haversineMeters(lastKeptRef.current, point) < MIN_STEP_METERS) {
+          if (lastKeptRef.current && haversineMeters(lastKeptRef.current, point) < stepMeters) {
             return; // hasn't moved far enough since the last kept point yet — standing still or walking very slowly
           }
           lastKeptRef.current = point;
@@ -323,6 +330,23 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
             {t("Stand at one corner, tap \"Start Walking\", then walk the full boundary of the plot once, in order, back to where you started. The system logs your position automatically as you go — no tapping needed per corner. Tap \"Finish\" once you've walked the whole perimeter.", lang)}
           </div>
 
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-sm text-[var(--gt-text)] whitespace-nowrap">{t("Capture a point every", lang)}</label>
+            <select
+              className="gt-input w-auto"
+              value={stepMeters}
+              onChange={(e) => setStepMeters(Number(e.target.value))}
+              disabled={tracking}
+            >
+              {STEP_OPTIONS_M.map((m) => (
+                <option key={m} value={m}>{m} {t("meters", lang)}</option>
+              ))}
+            </select>
+            <span className="text-xs text-[var(--gt-text-muted)]">
+              {t("Use a smaller spacing for a small/precise plot, a larger spacing for a bigger farm (fewer points, faster walk).", lang)}
+            </span>
+          </div>
+
           {tracking && (
             <div className="gt-card p-3 flex flex-col gap-2 bg-[#F1EBF7] border-none">
               <div className="flex items-center gap-2 text-sm text-[var(--gt-purple-dark)] font-medium">
@@ -332,6 +356,7 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
                 <span><b>{trackPoints.length}</b> {t("points logged", lang)}</span>
                 <span>{t("Distance walked:", lang)} <b>{Math.round(trackDistanceMeters)}m</b></span>
                 {trackPoints.length >= 3 && <span>{t("Enclosed area so far:", lang)} <b>{formatArea(trackAreaAcres, lang)}</b></span>}
+                <span className="text-xs text-[var(--gt-text-muted)]">{t("spacing:", lang)} {stepMeters}m</span>
                 {trackSkipped > 0 && <span className="text-[var(--gt-text-muted)]">({trackSkipped} {t("noisy readings skipped", lang)})</span>}
               </div>
             </div>
