@@ -133,6 +133,20 @@ export default function PlotBoundaryCapture() {
         )}
       </div>
 
+      {survey?.areca_area_acres > 0 && points.length >= 3 && (() => {
+        const diffPct = Math.abs(area - survey.areca_area_acres) / survey.areca_area_acres * 100;
+        if (diffPct <= 10) return null;
+        return (
+          <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg px-3 py-2.5">
+            <AlertCircle size={16} />
+            GPS-measured area ({formatArea(area)}) differs from the declared area ({survey.areca_area_acres} acres) by {Math.round(diffPct)}%.
+            {points.length === 3
+              ? " Only 3 points were captured — if the actual plot has 4+ corners, a 3-point boundary can undercount the area by roughly half. Make sure every real corner of the plot was walked, not just 3."
+              : " Double-check the boundary was walked around the full perimeter, in order, without skipping a corner."}
+          </div>
+        );
+      })()}
+
       <div className="gt-card p-4 md:p-6">
         {method === "draw" && <DrawMapTab points={points} onChange={handleChange} />}
         {method === "excel" && <ExcelUploadTab onParsed={handleChange} />}
