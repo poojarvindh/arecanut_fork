@@ -967,6 +967,18 @@ def dashboard_kpis(db: Session = Depends(get_db), user: m.User = Depends(get_cur
         vals = [field_fn(r) for r in rows if field_fn(r) is not None]
         return round(sum(vals) / len(vals), 2) if vals else 0
 
+    def ratio_of_sums(numer_fn, denom_fn, digits=2):
+        # sum(numerator)/sum(denominator) across rows where BOTH are present —
+        # a row missing either (a draft, or a processed-only sale with no
+        # yield_raw_qtl) is excluded from both sums rather than crashing the
+        # whole endpoint (sum() over a generator containing a single None
+        # raises TypeError: unsupported operand type(s) for +: 'float' and
+        # 'NoneType' — this bit in production once a draft/partial row existed).
+        pairs = [(numer_fn(r), denom_fn(r)) for r in rows]
+        pairs = [(n, d) for n, d in pairs if n is not None and d is not None]
+        denom_total = sum(d for _, d in pairs)
+        return round(sum(n for n, _ in pairs) / denom_total, digits) if denom_total else 0
+
     village_counts = Counter(r.village for r in rows)
     district_counts = Counter(r.district for r in rows)
     taluka_counts = Counter(r.taluka for r in rows)
@@ -1019,10 +1031,10 @@ def dashboard_kpis(db: Session = Depends(get_db), user: m.User = Depends(get_cur
             "avg_own_land": avg(lambda r: r.land_own_acres),
             "avg_leased_land": avg(lambda r: r.land_leased_acres),
             "avg_areca_area": avg(lambda r: r.areca_area_acres),
-            "avg_yield_per_acre": round(sum(r.yield_raw_qtl for r in rows) / sum(r.areca_area_acres for r in rows), 2) if rows else 0,
+            "avg_yield_per_acre": ratio_of_sums(lambda r: r.yield_raw_qtl, lambda r: r.areca_area_acres),
         },
         "economics": {
-            "avg_cost_per_acre": round(sum(r.cultivation_cost_inr for r in rows) / sum(r.areca_area_acres for r in rows), 0) if rows else 0,
+            "avg_cost_per_acre": ratio_of_sums(lambda r: r.cultivation_cost_inr, lambda r: r.areca_area_acres, digits=0),
             "avg_rate_per_kg": avg(lambda r: r.rate_inr_per_kg),
             "avg_net_income": avg(lambda r: r.total_income_inr),
             "sale_type_share": sale_type_counts.most_common(),
@@ -1098,25 +1110,30 @@ def yield_benchmarks(db: Session = Depends(get_db), user: m.User = Depends(get_c
     rows = db.query(m.FarmerSurvey).all()
 
     def bucket(rows_subset):
-        areas = [r.areca_area_acres for r in rows_subset if r.areca_area_acres]
-        plants = [r.areca_plant_count for r in rows_subset if r.areca_plant_count]
+        # Every numerator here (yield_raw_qtl, areca_plant_count,
+        # cultivation_cost_inr) can now be None — a draft, or a processed-only
+        # sale with no raw yield — so each comprehension below must guard the
+        # numerator too, not just the denominator it's filtered on.
         return {
             "sample_size": len(rows_subset),
-            "avg_plants_per_acre": _safe_avg([r.areca_plant_count / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
-            "avg_yield_per_acre_qtl": _safe_avg([r.yield_raw_qtl / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
-            "avg_yield_per_plant_kg": _safe_avg([r.yield_raw_qtl * 100 / r.areca_plant_count for r in rows_subset if r.areca_plant_count]),
+            "avg_plants_per_acre": _safe_avg([r.areca_plant_count / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.areca_plant_count is not None]),
+            "avg_yield_per_acre_qtl": _safe_avg([r.yield_raw_qtl / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.yield_raw_qtl is not None]),
+            "avg_yield_per_plant_kg": _safe_avg([r.yield_raw_qtl * 100 / r.areca_plant_count for r in rows_subset if r.areca_plant_count and r.yield_raw_qtl is not None]),
             "avg_rate_inr_per_kg": _safe_avg([r.rate_inr_per_kg for r in rows_subset]),
-            "avg_cost_per_acre_inr": _safe_avg([r.cultivation_cost_inr / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
+            "avg_cost_per_acre_inr": _safe_avg([r.cultivation_cost_inr / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.cultivation_cost_inr is not None]),
         }
 
     overall = bucket(rows)
 
+    # A draft can have no district/taluka at all — exclude None rather than
+    # sort it alongside strings, which TypeErrors ('<' not supported between
+    # 'str' and 'NoneType').
     by_district = {}
-    for d in sorted(set(r.district for r in rows)):
+    for d in sorted({r.district for r in rows if r.district is not None}):
         by_district[d] = bucket([r for r in rows if r.district == d])
 
     by_taluka = {}
-    for t in sorted(set(r.taluka for r in rows)):
+    for t in sorted({r.taluka for r in rows if r.taluka is not None}):
         by_taluka[t] = bucket([r for r in rows if r.taluka == t])
 
     return {"overall": overall, "by_district": by_district, "by_taluka": by_taluka}
