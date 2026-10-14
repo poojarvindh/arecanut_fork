@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { Geolocation } from "@capacitor/geolocation";
 import { Capacitor } from "@capacitor/core";
-import { MapPin, Undo2, AlertCircle, Navigation, X } from "lucide-react";
+import { MapPin, Undo2, AlertCircle, Navigation, X, Play, Square, RotateCcw } from "lucide-react";
 import type { LatLngPoint, PlotBoundary } from "../../lib/plotBoundary";
+import { areaInAcres, haversineMeters, formatArea } from "../../lib/plotBoundary";
 import { t } from "../../i18n";
 import { useLang } from "../../LangContext";
 
@@ -10,6 +11,8 @@ interface Props {
   points: PlotBoundary;
   onChange: (points: PlotBoundary) => void;
 }
+
+type GpsMode = "corners" | "track";
 
 // A GPS chip's very first fix after a cold/warm start is usually its worst —
 // it often comes from a cell-tower/wifi estimate before the chip has had time
@@ -25,11 +28,23 @@ const MAX_WAIT_MS = 20000;
 const TARGET_ACCURACY_M = 6;
 const WARN_ACCURACY_M = 20; // accepted, but flagged — canopy/urban-canyon conditions can genuinely not do better than this
 
+// Continuous "walk the perimeter" track mode: a point is only kept once the
+// walker has moved at least MIN_STEP_METERS from the last kept point (GPS
+// jitter while standing still would otherwise flood the polygon with noise
+// right on top of itself), and any single reading noisier than
+// MAX_TRACK_ACCURACY_M is dropped outright rather than letting one bad
+// moment put a spike in the boundary.
+const MIN_STEP_METERS = 4;
+const MAX_TRACK_ACCURACY_M = 25;
+
 // Genuinely shared across web and the Capacitor Android app — @capacitor/geolocation
 // normalizes the underlying platform API (browser Geolocation on web, native
 // GPS on Android), matching the cross-platform contract in the spec §6.
 export default function GpsCaptureTab({ points, onChange }: Props) {
   const { lang } = useLang();
+  const [mode, setMode] = useState<GpsMode>("corners");
+
+  // --- "Tap Each Corner" mode state ---
   const [accuracyByIndex, setAccuracyByIndex] = useState<Record<number, number>>({});
   const [capturing, setCapturing] = useState(false);
   const [liveAccuracy, setLiveAccuracy] = useState<number | null>(null);
@@ -39,7 +54,29 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   const bestRef = useRef<{ point: LatLngPoint; accuracy: number } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
+  // --- "Walk the Perimeter" track mode state ---
+  const [tracking, setTracking] = useState(false);
+  const [trackPoints, setTrackPoints] = useState<PlotBoundary>([]);
+  const [trackSkipped, setTrackSkipped] = useState(0); // readings dropped for being too noisy — surfaced so a user in bad-signal terrain understands why progress looks slow
+  const trackWatchIdRef = useRef<string | null>(null);
+  const lastKeptRef = useRef<LatLngPoint | null>(null);
+
   const isWeb = Capacitor.getPlatform() === "web";
+
+  const requestLocationPermission = async (): Promise<boolean> => {
+    try {
+      const perm = await Geolocation.requestPermissions().catch(() => null);
+      if (perm && perm.location === "denied") {
+        setError("Location permission denied — enable it in your device/browser settings.");
+        return false;
+      }
+    } catch {
+      // requestPermissions can throw on some platforms even when permission is fine — proceed and let watchPosition itself report a real failure.
+    }
+    return true;
+  };
+
+  // ---------------- Tap Each Corner ----------------
 
   const finishCapture = async () => {
     if (watchIdRef.current) {
@@ -70,16 +107,7 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
       setError("Location requires a secure connection (HTTPS) — this page is being served over plain HTTP.");
       return;
     }
-
-    try {
-      const perm = await Geolocation.requestPermissions().catch(() => null);
-      if (perm && perm.location === "denied") {
-        setError("Location permission denied — enable it in your device/browser settings.");
-        return;
-      }
-    } catch {
-      // requestPermissions can throw on some platforms even when permission is fine — proceed and let watchPosition itself report a real failure.
-    }
+    if (!(await requestLocationPermission())) return;
 
     bestRef.current = null;
     setLiveAccuracy(null);
@@ -131,10 +159,101 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
     });
   };
 
+  // ---------------- Walk the Perimeter ----------------
+
+  const startTracking = async () => {
+    setError(null);
+    if (isWeb && !window.isSecureContext) {
+      setError("Location requires a secure connection (HTTPS) — this page is being served over plain HTTP.");
+      return;
+    }
+    if (!(await requestLocationPermission())) return;
+
+    setTrackPoints([]);
+    setTrackSkipped(0);
+    lastKeptRef.current = null;
+    setTracking(true);
+
+    try {
+      const id = await Geolocation.watchPosition(
+        { enableHighAccuracy: true, timeout: 0, maximumAge: 0, minimumUpdateInterval: 1000 },
+        (pos, err) => {
+          if (err || !pos) return;
+          const { latitude, longitude, accuracy } = pos.coords;
+          if (accuracy > MAX_TRACK_ACCURACY_M) {
+            setTrackSkipped((n) => n + 1);
+            return;
+          }
+          const point: LatLngPoint = { lat: latitude, lng: longitude };
+          if (lastKeptRef.current && haversineMeters(lastKeptRef.current, point) < MIN_STEP_METERS) {
+            return; // hasn't moved far enough since the last kept point yet — standing still or walking very slowly
+          }
+          lastKeptRef.current = point;
+          setTrackPoints((prev) => [...prev, point]);
+        }
+      );
+      trackWatchIdRef.current = id;
+    } catch (e: any) {
+      setTracking(false);
+      const code = e?.code;
+      if (code === 1) setError("Location permission denied — enable it in your device/browser settings.");
+      else setError(e?.message || "Could not start GPS tracking. Please try again.");
+    }
+  };
+
+  const stopTrackingWatch = async () => {
+    if (trackWatchIdRef.current) {
+      await Geolocation.clearWatch({ id: trackWatchIdRef.current }).catch(() => {});
+      trackWatchIdRef.current = null;
+    }
+    setTracking(false);
+  };
+
+  const finishTrack = async () => {
+    await stopTrackingWatch();
+    if (trackPoints.length < 3) {
+      setError(t("The walked path needs at least 3 distinct points to form a boundary — keep walking further around the plot and try again.", lang));
+      return;
+    }
+    onChange(trackPoints); // a completed walk replaces the plot's boundary outright — it's the whole perimeter, not one more corner
+    setTrackPoints([]);
+    lastKeptRef.current = null;
+  };
+
+  const discardTrack = async () => {
+    await stopTrackingWatch();
+    setTrackPoints([]);
+    setTrackSkipped(0);
+    lastKeptRef.current = null;
+  };
+
+  const trackDistanceMeters = trackPoints.reduce(
+    (sum, p, i) => (i === 0 ? 0 : sum + haversineMeters(trackPoints[i - 1], p)),
+    0
+  );
+  const trackAreaAcres = trackPoints.length >= 3 ? areaInAcres(trackPoints) : 0;
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="text-sm text-[var(--gt-text-muted)]">
-        {t("Walk to each corner of the plot and tap \"Capture Current Point\" there. Capture at least 3 points, in order, to form the boundary.", lang)}
+      <div className="flex gap-2">
+        {([
+          { key: "corners" as const, label: "Tap Each Corner" },
+          { key: "track" as const, label: "Walk the Perimeter" },
+        ]).map((m) => (
+          <button
+            key={m.key}
+            type="button"
+            onClick={() => setMode(m.key)}
+            disabled={capturing || tracking}
+            className={`flex-1 text-sm font-medium px-3 py-2 rounded-lg border transition-colors ${
+              mode === m.key
+                ? "gt-gradient text-white border-transparent shadow-sm"
+                : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+            }`}
+          >
+            {t(m.label, lang)}
+          </button>
+        ))}
       </div>
 
       {error && (
@@ -143,51 +262,105 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
         </div>
       )}
 
-      {lastAccuracy != null && lastAccuracy > WARN_ACCURACY_M && (
-        <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg px-3 py-2">
-          <AlertCircle size={16} /> {t("Last point's accuracy was only ±{n}m — that corner may be off. Step into open sky (away from trees/buildings) and tap \"Undo\" then recapture it if you can.", lang).replace("{n}", String(Math.round(lastAccuracy)))}
-        </div>
-      )}
-
-      {capturing && (
-        <div className="gt-card p-3 flex items-center justify-between gap-3 bg-[#F1EBF7] border-none">
-          <div className="flex items-center gap-2 text-sm text-[var(--gt-purple-dark)]">
-            <Navigation size={16} className="animate-pulse" />
-            {liveAccuracy != null
-              ? t("Improving accuracy… current best ±{n}m", lang).replace("{n}", String(Math.round(liveAccuracy)))
-              : t("Getting a GPS fix…", lang)}
+      {mode === "corners" && (
+        <>
+          <div className="text-sm text-[var(--gt-text-muted)]">
+            {t("Walk to each corner of the plot and tap \"Capture Current Point\" there. Capture at least 3 points, in order, to form the boundary.", lang)}
           </div>
-          <button type="button" className="text-xs font-semibold text-[var(--gt-purple-dark)] underline flex items-center gap-1" onClick={cancelCapture}>
-            <X size={12} /> {t("Use this reading now", lang)}
-          </button>
-        </div>
+
+          {lastAccuracy != null && lastAccuracy > WARN_ACCURACY_M && (
+            <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-lg px-3 py-2">
+              <AlertCircle size={16} /> {t("Last point's accuracy was only ±{n}m — that corner may be off. Step into open sky (away from trees/buildings) and tap \"Undo\" then recapture it if you can.", lang).replace("{n}", String(Math.round(lastAccuracy)))}
+            </div>
+          )}
+
+          {capturing && (
+            <div className="gt-card p-3 flex items-center justify-between gap-3 bg-[#F1EBF7] border-none">
+              <div className="flex items-center gap-2 text-sm text-[var(--gt-purple-dark)]">
+                <Navigation size={16} className="animate-pulse" />
+                {liveAccuracy != null
+                  ? t("Improving accuracy… current best ±{n}m", lang).replace("{n}", String(Math.round(liveAccuracy)))
+                  : t("Getting a GPS fix…", lang)}
+              </div>
+              <button type="button" className="text-xs font-semibold text-[var(--gt-purple-dark)] underline flex items-center gap-1" onClick={cancelCapture}>
+                <X size={12} /> {t("Use this reading now", lang)}
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button className="gt-btn-primary flex items-center gap-2 flex-1 justify-center" onClick={capture} disabled={capturing}>
+              <Navigation size={16} className={capturing ? "animate-pulse" : ""} /> {t(capturing ? "Capturing…" : "Capture Current Point", lang)}
+            </button>
+            <button className="gt-btn-secondary flex items-center gap-1.5" onClick={undo} disabled={points.length === 0 || capturing}>
+              <Undo2 size={16} /> {t("Undo", lang)}
+            </button>
+          </div>
+
+          {points.length > 0 && (
+            <div className="gt-card p-3 max-h-64 overflow-y-auto">
+              {points.map((p, i) => (
+                <div key={i} className="flex items-center justify-between py-1.5 border-b border-[var(--gt-border)] last:border-none text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-[var(--gt-purple)] text-white text-xs font-semibold flex items-center justify-center shrink-0">{i + 1}</span>
+                    <span className="font-mono text-xs">{p.lat.toFixed(6)}, {p.lng.toFixed(6)}</span>
+                  </div>
+                  {accuracyByIndex[i] != null && (
+                    <span className={`text-[11px] flex items-center gap-1 ${accuracyByIndex[i] > WARN_ACCURACY_M ? "text-amber-600 font-medium" : "text-[var(--gt-text-muted)]"}`}>
+                      <MapPin size={11} /> ±{Math.round(accuracyByIndex[i])}m
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
-      <div className="flex gap-2">
-        <button className="gt-btn-primary flex items-center gap-2 flex-1 justify-center" onClick={capture} disabled={capturing}>
-          <Navigation size={16} className={capturing ? "animate-pulse" : ""} /> {t(capturing ? "Capturing…" : "Capture Current Point", lang)}
-        </button>
-        <button className="gt-btn-secondary flex items-center gap-1.5" onClick={undo} disabled={points.length === 0 || capturing}>
-          <Undo2 size={16} /> {t("Undo", lang)}
-        </button>
-      </div>
+      {mode === "track" && (
+        <>
+          <div className="text-sm text-[var(--gt-text-muted)]">
+            {t("Stand at one corner, tap \"Start Walking\", then walk the full boundary of the plot once, in order, back to where you started. The system logs your position automatically as you go — no tapping needed per corner. Tap \"Finish\" once you've walked the whole perimeter.", lang)}
+          </div>
 
-      {points.length > 0 && (
-        <div className="gt-card p-3 max-h-64 overflow-y-auto">
-          {points.map((p, i) => (
-            <div key={i} className="flex items-center justify-between py-1.5 border-b border-[var(--gt-border)] last:border-none text-sm">
-              <div className="flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-[var(--gt-purple)] text-white text-xs font-semibold flex items-center justify-center shrink-0">{i + 1}</span>
-                <span className="font-mono text-xs">{p.lat.toFixed(6)}, {p.lng.toFixed(6)}</span>
+          {tracking && (
+            <div className="gt-card p-3 flex flex-col gap-2 bg-[#F1EBF7] border-none">
+              <div className="flex items-center gap-2 text-sm text-[var(--gt-purple-dark)] font-medium">
+                <Navigation size={16} className="animate-pulse" /> {t("Walking… keep moving along the boundary", lang)}
               </div>
-              {accuracyByIndex[i] != null && (
-                <span className={`text-[11px] flex items-center gap-1 ${accuracyByIndex[i] > WARN_ACCURACY_M ? "text-amber-600 font-medium" : "text-[var(--gt-text-muted)]"}`}>
-                  <MapPin size={11} /> ±{Math.round(accuracyByIndex[i])}m
-                </span>
-              )}
+              <div className="flex items-center gap-4 text-sm flex-wrap">
+                <span><b>{trackPoints.length}</b> {t("points logged", lang)}</span>
+                <span>{t("Distance walked:", lang)} <b>{Math.round(trackDistanceMeters)}m</b></span>
+                {trackPoints.length >= 3 && <span>{t("Enclosed area so far:", lang)} <b>{formatArea(trackAreaAcres, lang)}</b></span>}
+                {trackSkipped > 0 && <span className="text-[var(--gt-text-muted)]">({trackSkipped} {t("noisy readings skipped", lang)})</span>}
+              </div>
             </div>
-          ))}
-        </div>
+          )}
+
+          <div className="flex gap-2">
+            {!tracking ? (
+              <button className="gt-btn-primary flex items-center gap-2 flex-1 justify-center" onClick={startTracking}>
+                <Play size={16} /> {t("Start Walking", lang)}
+              </button>
+            ) : (
+              <>
+                <button className="gt-btn-primary flex items-center gap-2 flex-1 justify-center" onClick={finishTrack}>
+                  <Square size={16} /> {t("Finish", lang)}
+                </button>
+                <button className="gt-btn-secondary flex items-center gap-1.5" onClick={discardTrack}>
+                  <RotateCcw size={16} /> {t("Discard", lang)}
+                </button>
+              </>
+            )}
+          </div>
+
+          {!tracking && points.length >= 3 && (
+            <div className="gt-card p-3 flex items-center justify-between flex-wrap gap-2 text-sm">
+              <span><b>{points.length}</b> {t("points in saved boundary", lang)}</span>
+              <span className="text-[var(--gt-purple-dark)] font-semibold">{formatArea(areaInAcres(points), lang)}</span>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

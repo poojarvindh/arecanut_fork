@@ -154,7 +154,12 @@ class FarmerPlotIn(BaseModel):
     boundary is actually walked/drawn/uploaded for it."""
     label: str = Field("Plot 1", max_length=STR_MAX)
     reported_area_acres: float = Field(..., ge=0, le=100000)
-    points: Optional[List[LatLngPoint]] = None
+    # Capped at 3000 — same OWASP API4:2023 unrestricted-resource-consumption
+    # reasoning as the legacy PlotBoundaryIn.points cap below, just a bit
+    # higher to give a "walk the whole perimeter continuously" capture (the
+    # newer GPS track mode) real headroom over the old "tap each corner"
+    # mode's handful of points.
+    points: Optional[List[LatLngPoint]] = Field(None, max_length=3000)
     area_acres: Optional[float] = Field(None, ge=0, le=100000)
     method: Optional[str] = Field(None, pattern="^(draw|excel|gps)$")
 
@@ -178,7 +183,7 @@ class DraftPlotIn(BaseModel):
     validators at all, since "incomplete" is the whole point of a draft."""
     label: Optional[str] = Field(None, max_length=STR_MAX)
     reported_area_acres: Optional[float] = Field(None, ge=0, le=100000)
-    points: Optional[List[LatLngPoint]] = None
+    points: Optional[List[LatLngPoint]] = Field(None, max_length=3000)
     area_acres: Optional[float] = Field(None, ge=0, le=100000)
     method: Optional[str] = Field(None, max_length=20)
 
