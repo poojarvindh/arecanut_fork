@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Pencil, ArrowLeft, UserSearch, Handshake, MapPin, LandPlot, Wheat,
   Coins, Warehouse, TriangleAlert, Sprout, Wrench, Truck, Smartphone, CreditCard,
-  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2, History,
+  Landmark, Droplets, FlaskConical, ScanLine, Map, Trash2, History, AlertCircle,
 } from "lucide-react";
 import { api } from "../api";
 import { useLang } from "../LangContext";
@@ -56,7 +56,7 @@ export default function SurveyView() {
 
   const handleDelete = async () => {
     if (!s) return;
-    if (!confirm(`Delete the record for ${s.farmer_name} (${s.farmer_id})? This cannot be undone.`)) return;
+    if (!confirm(`Delete the record for ${s.farmer_name || "this draft"} (${s.farmer_id || "no Farmer ID assigned yet"})? This cannot be undone.`)) return;
     setDeleting(true);
     try {
       await api.deleteSurvey(s.id);
@@ -80,21 +80,30 @@ export default function SurveyView() {
 
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-xl font-bold text-[var(--gt-purple-dark)]">{s.farmer_name}</h1>
-          <p className="text-sm text-[var(--gt-text-muted)]">{s.farmer_id} &middot; {s.mobile_no}</p>
+          <h1 className="text-xl font-bold text-[var(--gt-purple-dark)] flex items-center gap-2">
+            {s.farmer_name || <span className="text-[var(--gt-text-muted)]">Untitled draft</span>}
+            {s.status === "draft" && (
+              <span className="text-[11px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">DRAFT</span>
+            )}
+          </h1>
+          <p className="text-sm text-[var(--gt-text-muted)]">{s.farmer_id || "No Farmer ID yet"} &middot; {s.mobile_no || "—"}</p>
         </div>
         <div className="flex gap-2">
           <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate("/farmers")}>
             <ArrowLeft size={15} /> Back to List
           </button>
-          <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/plot-boundary`)}>
-            <Map size={15} /> Plot Boundary
-          </button>
-          <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/history`)}>
-            <History size={15} /> History
-          </button>
+          {s.status !== "draft" && (
+            <>
+              <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/plot-boundary`)}>
+                <Map size={15} /> Plot Boundary
+              </button>
+              <button className="gt-btn-secondary flex items-center gap-1.5" onClick={() => navigate(`/farmers/${s.id}/history`)}>
+                <History size={15} /> History
+              </button>
+            </>
+          )}
           <button className="gt-btn-primary flex items-center gap-1.5" onClick={() => navigate(`/entry/farmer?id=${s.id}`)}>
-            <Pencil size={15} /> Edit
+            <Pencil size={15} /> {s.status === "draft" ? "Continue Draft" : "Edit"}
           </button>
           {user?.role === "admin" && (
             <button
@@ -108,10 +117,18 @@ export default function SurveyView() {
         </div>
       </div>
 
+      {s.status === "draft" && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-2.5">
+          <AlertCircle size={16} /> This survey hasn't been submitted yet — some fields below may be blank. Click "Continue Draft" to finish it.
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-4">
         <div className="gt-card p-4 bg-[#F1EBF7] border-none">
           <div className="text-xs text-[var(--gt-text-muted)]">Total Income from Areca (auto-calculated)</div>
-          <div className="text-2xl font-bold text-[var(--gt-purple-dark)]">₹{s.total_income_inr.toLocaleString("en-IN")}</div>
+          <div className="text-2xl font-bold text-[var(--gt-purple-dark)]">
+            {s.total_income_inr != null ? `₹${s.total_income_inr.toLocaleString("en-IN")}` : "—"}
+          </div>
         </div>
         <div className="gt-card p-4 bg-[#F1EBF7] border-none">
           <div className="text-xs text-[var(--gt-text-muted)]">Mapped Plot Area</div>

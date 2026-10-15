@@ -14,10 +14,10 @@ from sqlalchemy import func
 import datetime
 
 from .config import get_settings
-from .db import Base, engine, get_db, sync_missing_columns, migrate_roles_and_permissions
+from .db import Base, engine, get_db, sync_missing_columns, sync_nullable_columns, migrate_roles_and_permissions
 from . import models as m
 from .schemas import (
-    SurveyIn, SurveyOut, FarmerLookup, LoginIn, TokenOut, UserOut, RefreshIn, LogoutIn,
+    SurveyIn, SurveyOut, SurveyDraftIn, FarmerLookup, LoginIn, TokenOut, UserOut, RefreshIn, LogoutIn,
     ForgotPasswordIn, ResetPasswordIn, PlotBoundaryIn, PlotBoundaryOut, PlotSummaryOut,
     UserAdminOut, UserCreateIn, UserUpdateIn,
 )
@@ -36,9 +36,18 @@ from .fpo_consultation import router as fpo_consultation_router
 settings = get_settings()
 Base.metadata.create_all(bind=engine)
 sync_missing_columns()
+sync_nullable_columns()
 migrate_roles_and_permissions()
 
-app = FastAPI(title="Arecanut Farmer Data Collection API", debug=not settings.is_production)
+app = FastAPI(
+    title="Arecanut Farmer Data Collection API",
+    description="REST API for the Karnataka arecanut farmer survey app — auth, "
+    "master data, farmer surveys, plot boundaries, FPO consultations, and the "
+    "admin dashboard. Authenticate with POST /api/auth/login, then click "
+    "'Authorize' above and paste the returned access_token as a Bearer token.",
+    version="1.0.0",
+    debug=not settings.is_production,
+)
 
 # ---------------- security middleware ----------------
 
@@ -57,7 +66,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(self), camera=(self), microphone=()"
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        if request.url.path in ("/docs", "/redoc"):
+            # Swagger UI / ReDoc load their JS+CSS from jsdelivr's CDN by
+            # default — the site-wide "default-src 'none'" CSP below would
+            # otherwise silently block those assets and render a blank page.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data: https://fastapi.tiangolo.com; "
+                "font-src 'self' data:; "
+                "connect-src 'self'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
@@ -85,7 +107,7 @@ def _perm_list(user: m.User) -> list:
     return [p for p in (user.permissions or "").split(",") if p]
 
 
-@app.post("/api/auth/login", response_model=TokenOut)
+@app.post("/api/auth/login", response_model=TokenOut, tags=["Auth"])
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login(request: Request, payload: LoginIn, db: Session = Depends(get_db)):
     user = db.query(m.User).filter(m.User.username == payload.username).first()
@@ -114,7 +136,7 @@ def login(request: Request, payload: LoginIn, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/api/auth/refresh", response_model=TokenOut)
+@app.post("/api/auth/refresh", response_model=TokenOut, tags=["Auth"])
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
 def refresh(request: Request, payload: RefreshIn, db: Session = Depends(get_db)):
     user, new_refresh = rotate_refresh_token(db, payload.refresh_token)
@@ -126,13 +148,13 @@ def refresh(request: Request, payload: RefreshIn, db: Session = Depends(get_db))
     )
 
 
-@app.post("/api/auth/logout")
+@app.post("/api/auth/logout", tags=["Auth"])
 def logout(payload: LogoutIn, db: Session = Depends(get_db)):
     revoke_refresh_token(db, payload.refresh_token)
     return {"ok": True}
 
 
-@app.get("/api/auth/me", response_model=UserOut)
+@app.get("/api/auth/me", response_model=UserOut, tags=["Auth"])
 def me(user: m.User = Depends(get_current_user)):
     return UserOut(username=user.username, full_name=user.full_name, role=user.role, permissions=_perm_list(user))
 
@@ -141,12 +163,12 @@ def me(user: m.User = Depends(get_current_user)):
 # Exactly one "admin" account may ever exist — enforced in create_user and
 # update_user below, not just at seed time. Every mutation is audit-logged.
 
-@app.get("/api/users", response_model=list[UserAdminOut])
+@app.get("/api/users", response_model=list[UserAdminOut], tags=["Users"])
 def list_users(db: Session = Depends(get_db), admin: m.User = Depends(require_role("admin"))):
     return db.query(m.User).order_by(m.User.created_at).all()
 
 
-@app.get("/api/users/permission-modules")
+@app.get("/api/users/permission-modules", tags=["Users"])
 def get_permission_modules(admin: m.User = Depends(require_role("admin"))):
     """The fixed set of module keys the User Management screen renders as
     checkboxes — a single source of truth shared with auth.PERMISSION_MODULES,
@@ -154,7 +176,7 @@ def get_permission_modules(admin: m.User = Depends(require_role("admin"))):
     return PERMISSION_MODULES
 
 
-@app.post("/api/users", response_model=UserAdminOut)
+@app.post("/api/users", response_model=UserAdminOut, tags=["Users"])
 def create_user(
     request: Request,
     payload: UserCreateIn,
@@ -189,7 +211,7 @@ def create_user(
     return user
 
 
-@app.put("/api/users/{user_id}", response_model=UserAdminOut)
+@app.put("/api/users/{user_id}", response_model=UserAdminOut, tags=["Users"])
 def update_user(
     user_id: int,
     request: Request,
@@ -234,7 +256,7 @@ def update_user(
     return user
 
 
-@app.post("/api/auth/forgot-password")
+@app.post("/api/auth/forgot-password", tags=["Auth"])
 @limiter.limit(settings.RATE_LIMIT_PASSWORD_RESET)
 def forgot_password(request: Request, payload: ForgotPasswordIn, db: Session = Depends(get_db)):
     """
@@ -266,7 +288,7 @@ def forgot_password(request: Request, payload: ForgotPasswordIn, db: Session = D
     return generic_response
 
 
-@app.post("/api/auth/reset-password")
+@app.post("/api/auth/reset-password", tags=["Auth"])
 @limiter.limit(settings.RATE_LIMIT_PASSWORD_RESET)
 def reset_password(request: Request, payload: ResetPasswordIn, db: Session = Depends(get_db)):
     # Validate the new password BEFORE consuming the token — a rejected weak
@@ -290,12 +312,12 @@ def reset_password(request: Request, payload: ResetPasswordIn, db: Session = Dep
 
 # ---------------- MASTER DATA ----------------
 
-@app.get("/api/masters/districts")
+@app.get("/api/masters/districts", tags=["Master Data"])
 def get_districts(db: Session = Depends(get_db)):
     return [d.name for d in db.query(m.District).order_by(m.District.name).all()]
 
 
-@app.get("/api/masters/talukas")
+@app.get("/api/masters/talukas", tags=["Master Data"])
 def get_talukas(district: str = Query(...), db: Session = Depends(get_db)):
     d = db.query(m.District).filter(m.District.name == district).first()
     if not d:
@@ -303,7 +325,7 @@ def get_talukas(district: str = Query(...), db: Session = Depends(get_db)):
     return [t.name for t in d.talukas]
 
 
-@app.get("/api/masters/villages")
+@app.get("/api/masters/villages", tags=["Master Data"])
 def get_villages(district: str = Query(...), taluka: str = Query(...), db: Session = Depends(get_db)):
     t = (
         db.query(m.Taluka)
@@ -316,7 +338,7 @@ def get_villages(district: str = Query(...), taluka: str = Query(...), db: Sessi
     return [v.name for v in t.villages]
 
 
-@app.get("/api/masters/villages-flat")
+@app.get("/api/masters/villages-flat", tags=["Master Data"])
 def get_villages_flat(db: Session = Depends(get_db)):
     """Every village with its parent taluka & district, for reverse (village-first) lookup."""
     rows = (
@@ -332,7 +354,7 @@ def get_villages_flat(db: Session = Depends(get_db)):
     ]
 
 
-@app.get("/api/masters/societies")
+@app.get("/api/masters/societies", tags=["Master Data"])
 def get_societies(taluka: Optional[str] = None, db: Session = Depends(get_db)):
     """
     Without a taluka filter, returns every society (used by admin screens / legacy
@@ -349,22 +371,22 @@ def get_societies(taluka: Optional[str] = None, db: Session = Depends(get_db)):
     return [s.name for s in q.order_by(m.Society.name).all()]
 
 
-@app.get("/api/masters/crops")
+@app.get("/api/masters/crops", tags=["Master Data"])
 def get_crops(db: Session = Depends(get_db)):
     return [c.name for c in db.query(m.CropMaster).order_by(m.CropMaster.name).all()]
 
 
-@app.get("/api/masters/schemes")
+@app.get("/api/masters/schemes", tags=["Master Data"])
 def get_schemes(db: Session = Depends(get_db)):
     return [s.name for s in db.query(m.SchemeMaster).order_by(m.SchemeMaster.name).all()]
 
 
-@app.get("/api/masters/machines")
+@app.get("/api/masters/machines", tags=["Master Data"])
 def get_machines(db: Session = Depends(get_db)):
     return [x.name for x in db.query(m.MachineMaster).order_by(m.MachineMaster.sort_order).all()]
 
 
-@app.get("/api/masters/options")
+@app.get("/api/masters/options", tags=["Master Data"])
 def get_options(list_code: str = Query(...), db: Session = Depends(get_db)):
     rows = (
         db.query(m.OptionMaster)
@@ -377,7 +399,7 @@ def get_options(list_code: str = Query(...), db: Session = Depends(get_db)):
 
 # ---------------- FARMER MASTER LOOKUP (Module 0: search by Aadhaar/Mobile) ----------------
 
-@app.get("/api/farmer-master/lookup", response_model=Optional[FarmerLookup])
+@app.get("/api/farmer-master/lookup", response_model=Optional[FarmerLookup], tags=["Farmer Lookup"])
 def lookup_farmer(q: str = Query(..., description="Aadhaar, Mobile number, or Farmer ID"), db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
     q = q.strip()
     # Mobile/Aadhaar stay exact-match — they're sensitive identifiers, and partial
@@ -444,7 +466,7 @@ def build_survey_query(
     credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
     input_source, input_challenges, tech_adoption, society_benefits,
     cultivation_challenges, irrigation_source, mech_owned, mech_rented,
-    sort_by, sort_dir,
+    sort_by, sort_dir, status=None,
 ):
     """Shared by GET /api/surveys and GET /api/surveys/export (CR-19) so the
     export always reflects exactly the filters/sort the list view is
@@ -452,6 +474,13 @@ def build_survey_query(
     query = db.query(m.FarmerSurvey)
     if farmer_id:
         query = query.filter(m.FarmerSurvey.farmer_id == farmer_id)  # CR-18: Farmer History view
+    if status == "draft":
+        query = query.filter(m.FarmerSurvey.status == "draft")
+    elif status == "submitted":
+        # NULL means "submitted" for every row saved before Save as Draft
+        # existed — they necessarily went through the old all-or-nothing
+        # validation, so excluding NULL here would hide most real records.
+        query = query.filter((m.FarmerSurvey.status == "submitted") | (m.FarmerSurvey.status.is_(None)))
     local_vars = locals()
     for field in EXACT_FILTER_FIELDS:
         value = local_vars.get(field)
@@ -468,7 +497,34 @@ def build_survey_query(
     return query.order_by(sort_col.asc() if sort_dir == "asc" else sort_col.desc())
 
 
-@app.get("/api/surveys", response_model=list[SurveyOut])
+def serialize_plot(p: m.FarmerPlot) -> dict:
+    return {
+        "id": p.id, "label": p.label, "reported_area_acres": p.reported_area_acres,
+        "points": p.points, "area_acres": p.area_acres, "method": p.method,
+        "captured_at": p.captured_at,
+    }
+
+
+def serialize_survey(s: m.FarmerSurvey) -> dict:
+    """
+    Manual dict serialization instead of FastAPI's response_model=SurveyOut.
+    A draft row can have NULL in any of the many fields SurveyOut inherits
+    as strictly-required from SurveyIn (farmer_name, village, sale_type,
+    ...) — running it through that Pydantic model would 500 the entire
+    list/get endpoint the moment one draft exists, the exact same class of
+    bug this file already documents once for model_validators (see
+    SurveyOut's "input-only" validator overrides) but this time at the
+    field-requiredness level, which can't be overridden the same way.
+    Bypassing response_model entirely for these two read endpoints sidesteps
+    it for good, for both drafts and any future requirement change.
+    """
+    data = {c.name: getattr(s, c.name) for c in m.FarmerSurvey.__table__.columns}
+    data["status"] = s.status or "submitted"
+    data["plots"] = [serialize_plot(p) for p in s.plots]
+    return data
+
+
+@app.get("/api/surveys", response_model=None)
 def list_surveys(
     q: Optional[str] = None,
     farmer_id: Optional[str] = None,
@@ -497,6 +553,7 @@ def list_surveys(
     mech_rented: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    status: Optional[str] = Query(None, pattern="^(draft|submitted)$"),  # Save as Draft
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -508,14 +565,15 @@ def list_surveys(
         credit_source, scheme_availed, scheme_name, soil_test_done, crop_insurance,
         input_source, input_challenges, tech_adoption, society_benefits,
         cultivation_challenges, irrigation_source, mech_owned, mech_rented,
-        sort_by, sort_dir,
+        sort_by, sort_dir, status,
     )
     # capped result size + offset — prevents a single request from pulling the
     # entire table (OWASP API4:2023 Unrestricted Resource Consumption)
-    return query.offset(offset).limit(limit).all()
+    rows = query.offset(offset).limit(limit).all()
+    return [serialize_survey(r) for r in rows]
 
 
-@app.get("/api/surveys/export")
+@app.get("/api/surveys/export", tags=["Surveys"])
 def export_surveys(
     request: Request,
     q: Optional[str] = None,
@@ -588,12 +646,12 @@ def export_surveys(
     )
 
 
-@app.get("/api/surveys/{survey_id}", response_model=SurveyOut)
+@app.get("/api/surveys/{survey_id}", response_model=None)
 def get_survey(survey_id: int, db: Session = Depends(get_db), user: m.User = Depends(require_permission("farmer_records"))):
     s = db.query(m.FarmerSurvey).get(survey_id)
     if not s:
         raise HTTPException(status_code=404, detail="Survey not found")
-    return s
+    return serialize_survey(s)
 
 
 def compute_income(payload: SurveyIn) -> float:
@@ -602,9 +660,12 @@ def compute_income(payload: SurveyIn) -> float:
     is_grading = includes_processed and payload.grading_done == "Yes"
     gross = 0.0
     if is_grading:
-        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket rate.
+        # CR-05/CR-07: graded produce is sold at a per-variety rate, not one blanket
+        # rate. That per-row rate is INR/Quintal (not INR/Kg like the blanket rate
+        # below), and quantity_qtl is already in quintals, so no kg->quintal *100
+        # conversion is needed here.
         rows = json.loads(payload.grading_rows) if payload.grading_rows else []
-        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) * 100 for r in rows)
+        gross += sum((r.get("quantity_qtl") or 0) * (r.get("rate_inr_per_kg") or 0) for r in rows)
         if includes_raw:
             gross += (payload.yield_raw_qtl or 0) * (payload.rate_inr_per_kg or 0) * 100
     else:
@@ -652,7 +713,7 @@ def sync_plots(db: Session, survey: m.FarmerSurvey, plots_in):
         points_json = json.dumps([pt.model_dump() for pt in p.points]) if p.points else None
         survey.plots.append(m.FarmerPlot(
             sort_order=i,
-            label=p.label,
+            label=p.label or "Plot 1",
             reported_area_acres=p.reported_area_acres,
             boundary=points_json,
             area_acres=p.area_acres,
@@ -672,7 +733,7 @@ def sync_plots(db: Session, survey: m.FarmerSurvey, plots_in):
         survey.plot_boundary_captured_at = None
 
 
-@app.post("/api/surveys", response_model=SurveyOut)
+@app.post("/api/surveys", response_model=SurveyOut, tags=["Surveys"])
 def create_survey(
     request: Request,
     payload: SurveyIn,
@@ -688,6 +749,7 @@ def create_survey(
 
     data = payload.dict()
     plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
+    data["status"] = "submitted"  # a full SurveyIn payload is, by definition, a completed survey — see POST .../draft for in-progress saves
     data["total_income_inr"] = compute_income(payload)
     data["entry_timestamp"] = datetime.datetime.utcnow()
     data["created_by_user_id"] = user.id
@@ -707,7 +769,7 @@ def create_survey(
     return survey
 
 
-@app.put("/api/surveys/{survey_id}", response_model=SurveyOut)
+@app.put("/api/surveys/{survey_id}", response_model=SurveyOut, tags=["Surveys"])
 def update_survey(
     survey_id: int,
     request: Request,
@@ -720,9 +782,16 @@ def update_survey(
         raise HTTPException(status_code=404, detail="Survey not found")
     data = payload.dict()
     plots_in = data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17)
+    data["status"] = "submitted"  # finalizes a draft (or no-ops if it was already submitted) — a full SurveyIn payload is always complete
     data["total_income_inr"] = compute_income(payload)
     if not data.get("farmer_id"):
-        data["farmer_id"] = survey.farmer_id  # never overwrite an assigned id with blank
+        # Preserve whatever the record already has — except a draft never
+        # had one assigned at all (farmer_id is only auto-generated on a
+        # brand-new create_survey, never on a draft save), so finalizing one
+        # via this endpoint needs the same one-time assignment create_survey
+        # would have done, or the now-"submitted" record would be stuck with
+        # no farmer_id forever.
+        data["farmer_id"] = survey.farmer_id or generate_farmer_id(db)
     if data.get("plot_boundary") and data.get("plot_boundary") != survey.plot_boundary:
         data["plot_boundary_captured_at"] = datetime.datetime.utcnow()
     for k, v in data.items():
@@ -732,6 +801,67 @@ def update_survey(
     db.refresh(survey)
     audit(db, request, "survey_update", user=user, resource=f"survey:{survey.id}")
     return survey
+
+
+@app.post("/api/surveys/draft", response_model=None)
+def create_survey_draft(
+    request: Request,
+    payload: SurveyDraftIn,
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("survey_entry")),
+):
+    """
+    Save as Draft: a field enumerator very often can't finish the full
+    survey in one sitting (poor connectivity mid-village, the respondent
+    gets pulled away, etc.) — this persists whatever has been filled in so
+    far with none of SurveyIn's strict requirements enforced, so it can be
+    resumed later from exactly where it was left off. Finalizing a draft
+    still goes through the existing, unchanged, fully-validated POST/PUT
+    /api/surveys — this endpoint and its PUT counterpart below only ever
+    produce status="draft" rows.
+    """
+    data = payload.dict()
+    data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17), using payload.plots below (the real pydantic objects, not the dict-ified copy)
+    data["status"] = "draft"
+    data["entry_timestamp"] = datetime.datetime.utcnow()
+    data["created_by_user_id"] = user.id
+    survey = m.FarmerSurvey(**data)
+    db.add(survey)
+    db.flush()
+    sync_plots(db, survey, payload.plots)
+    db.commit()
+    db.refresh(survey)
+    audit(db, request, "survey_draft_save", user=user, resource=f"survey:{survey.id}")
+    return serialize_survey(survey)
+
+
+@app.put("/api/surveys/{survey_id}/draft", response_model=None)
+def update_survey_draft(
+    survey_id: int,
+    request: Request,
+    payload: SurveyDraftIn,
+    db: Session = Depends(get_db),
+    user: m.User = Depends(require_permission("survey_entry")),
+):
+    survey = db.query(m.FarmerSurvey).get(survey_id)
+    if not survey:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    if survey.status not in (None, "draft"):
+        # Never silently revert an already-submitted survey back to an
+        # incomplete-looking draft — resuming a completed record should go
+        # through the normal edit form (PUT /api/surveys/{id}), which keeps
+        # SurveyIn's full validation.
+        raise HTTPException(status_code=400, detail="This survey has already been submitted — edit it from the farmer record instead of Save as Draft.")
+    data = payload.dict()
+    data.pop("plots", None)  # not a FarmerSurvey column — handled via sync_plots (CR-17), using payload.plots below
+    data["status"] = "draft"
+    for k, v in data.items():
+        setattr(survey, k, v)
+    sync_plots(db, survey, payload.plots)
+    db.commit()
+    db.refresh(survey)
+    audit(db, request, "survey_draft_save", user=user, resource=f"survey:{survey.id}")
+    return serialize_survey(survey)
 
 
 @app.delete("/api/surveys/{survey_id}")
@@ -754,7 +884,7 @@ def delete_survey(
 # Separate from the survey's own PUT so saving a boundary (draw / Excel / GPS)
 # never requires re-submitting — or re-validating — the entire 60+ field survey.
 
-@app.get("/api/surveys/{survey_id}/plot-boundary", response_model=Optional[PlotBoundaryOut])
+@app.get("/api/surveys/{survey_id}/plot-boundary", response_model=Optional[PlotBoundaryOut], tags=["Plot Boundary"])
 def get_plot_boundary(survey_id: int, db: Session = Depends(get_db), user: m.User = Depends(require_permission("plots_map"))):
     survey = db.query(m.FarmerSurvey).get(survey_id)
     if not survey:
@@ -770,7 +900,7 @@ def get_plot_boundary(survey_id: int, db: Session = Depends(get_db), user: m.Use
     )
 
 
-@app.put("/api/surveys/{survey_id}/plot-boundary", response_model=PlotBoundaryOut)
+@app.put("/api/surveys/{survey_id}/plot-boundary", response_model=PlotBoundaryOut, tags=["Plot Boundary"])
 def save_plot_boundary(
     survey_id: int,
     payload: PlotBoundaryIn,
@@ -799,7 +929,7 @@ def save_plot_boundary(
     )
 
 
-@app.delete("/api/surveys/{survey_id}/plot-boundary")
+@app.delete("/api/surveys/{survey_id}/plot-boundary", tags=["Plot Boundary"])
 def delete_plot_boundary(
     survey_id: int,
     request: Request,
@@ -818,7 +948,7 @@ def delete_plot_boundary(
     return {"ok": True}
 
 
-@app.get("/api/plots", response_model=list[PlotSummaryOut])
+@app.get("/api/plots", response_model=list[PlotSummaryOut], tags=["Plot Boundary"])
 def list_plots(
     only_with_boundary: bool = Query(False),
     db: Session = Depends(get_db),
@@ -846,7 +976,7 @@ def split_multi(values):
     return counter
 
 
-@app.get("/api/dashboard/kpis")
+@app.get("/api/dashboard/kpis", tags=["Dashboard"])
 def dashboard_kpis(db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
     rows = db.query(m.FarmerSurvey).all()
     total = len(rows) or 1
@@ -857,6 +987,18 @@ def dashboard_kpis(db: Session = Depends(get_db), user: m.User = Depends(get_cur
     def avg(field_fn):
         vals = [field_fn(r) for r in rows if field_fn(r) is not None]
         return round(sum(vals) / len(vals), 2) if vals else 0
+
+    def ratio_of_sums(numer_fn, denom_fn, digits=2):
+        # sum(numerator)/sum(denominator) across rows where BOTH are present —
+        # a row missing either (a draft, or a processed-only sale with no
+        # yield_raw_qtl) is excluded from both sums rather than crashing the
+        # whole endpoint (sum() over a generator containing a single None
+        # raises TypeError: unsupported operand type(s) for +: 'float' and
+        # 'NoneType' — this bit in production once a draft/partial row existed).
+        pairs = [(numer_fn(r), denom_fn(r)) for r in rows]
+        pairs = [(n, d) for n, d in pairs if n is not None and d is not None]
+        denom_total = sum(d for _, d in pairs)
+        return round(sum(n for n, _ in pairs) / denom_total, digits) if denom_total else 0
 
     village_counts = Counter(r.village for r in rows)
     district_counts = Counter(r.district for r in rows)
@@ -910,10 +1052,10 @@ def dashboard_kpis(db: Session = Depends(get_db), user: m.User = Depends(get_cur
             "avg_own_land": avg(lambda r: r.land_own_acres),
             "avg_leased_land": avg(lambda r: r.land_leased_acres),
             "avg_areca_area": avg(lambda r: r.areca_area_acres),
-            "avg_yield_per_acre": round(sum(r.yield_raw_qtl for r in rows) / sum(r.areca_area_acres for r in rows), 2) if rows else 0,
+            "avg_yield_per_acre": ratio_of_sums(lambda r: r.yield_raw_qtl, lambda r: r.areca_area_acres),
         },
         "economics": {
-            "avg_cost_per_acre": round(sum(r.cultivation_cost_inr for r in rows) / sum(r.areca_area_acres for r in rows), 0) if rows else 0,
+            "avg_cost_per_acre": ratio_of_sums(lambda r: r.cultivation_cost_inr, lambda r: r.areca_area_acres, digits=0),
             "avg_rate_per_kg": avg(lambda r: r.rate_inr_per_kg),
             "avg_net_income": avg(lambda r: r.total_income_inr),
             "sale_type_share": sale_type_counts.most_common(),
@@ -978,7 +1120,7 @@ def _safe_avg(values):
     return round(sum(values) / len(values), 2) if values else 0
 
 
-@app.get("/api/dashboard/yield-benchmarks")
+@app.get("/api/dashboard/yield-benchmarks", tags=["Dashboard"])
 def yield_benchmarks(db: Session = Depends(get_db), user: m.User = Depends(get_current_user)):
     """
     Historical productivity benchmarks (from actual survey data) used to power the
@@ -989,25 +1131,30 @@ def yield_benchmarks(db: Session = Depends(get_db), user: m.User = Depends(get_c
     rows = db.query(m.FarmerSurvey).all()
 
     def bucket(rows_subset):
-        areas = [r.areca_area_acres for r in rows_subset if r.areca_area_acres]
-        plants = [r.areca_plant_count for r in rows_subset if r.areca_plant_count]
+        # Every numerator here (yield_raw_qtl, areca_plant_count,
+        # cultivation_cost_inr) can now be None — a draft, or a processed-only
+        # sale with no raw yield — so each comprehension below must guard the
+        # numerator too, not just the denominator it's filtered on.
         return {
             "sample_size": len(rows_subset),
-            "avg_plants_per_acre": _safe_avg([r.areca_plant_count / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
-            "avg_yield_per_acre_qtl": _safe_avg([r.yield_raw_qtl / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
-            "avg_yield_per_plant_kg": _safe_avg([r.yield_raw_qtl * 100 / r.areca_plant_count for r in rows_subset if r.areca_plant_count]),
+            "avg_plants_per_acre": _safe_avg([r.areca_plant_count / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.areca_plant_count is not None]),
+            "avg_yield_per_acre_qtl": _safe_avg([r.yield_raw_qtl / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.yield_raw_qtl is not None]),
+            "avg_yield_per_plant_kg": _safe_avg([r.yield_raw_qtl * 100 / r.areca_plant_count for r in rows_subset if r.areca_plant_count and r.yield_raw_qtl is not None]),
             "avg_rate_inr_per_kg": _safe_avg([r.rate_inr_per_kg for r in rows_subset]),
-            "avg_cost_per_acre_inr": _safe_avg([r.cultivation_cost_inr / r.areca_area_acres for r in rows_subset if r.areca_area_acres]),
+            "avg_cost_per_acre_inr": _safe_avg([r.cultivation_cost_inr / r.areca_area_acres for r in rows_subset if r.areca_area_acres and r.cultivation_cost_inr is not None]),
         }
 
     overall = bucket(rows)
 
+    # A draft can have no district/taluka at all — exclude None rather than
+    # sort it alongside strings, which TypeErrors ('<' not supported between
+    # 'str' and 'NoneType').
     by_district = {}
-    for d in sorted(set(r.district for r in rows)):
+    for d in sorted({r.district for r in rows if r.district is not None}):
         by_district[d] = bucket([r for r in rows if r.district == d])
 
     by_taluka = {}
-    for t in sorted(set(r.taluka for r in rows)):
+    for t in sorted({r.taluka for r in rows if r.taluka is not None}):
         by_taluka[t] = bucket([r for r in rows if r.taluka == t])
 
     return {"overall": overall, "by_district": by_district, "by_taluka": by_taluka}

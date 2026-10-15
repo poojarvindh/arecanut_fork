@@ -100,10 +100,7 @@ export default function Login() {
           </button>
         </form>
 
-        <div className="text-[11px] text-[var(--gt-text-muted)] mt-4 text-center">
-          Demo accounts — admin / Admin@2024Gt &nbsp;·&nbsp; enumerator1 / Field@2024Gt
-        </div>
-        <div className="text-[10px] text-[var(--gt-text-muted)] mt-2 text-center opacity-70">
+        <div className="text-[10px] text-[var(--gt-text-muted)] mt-4 text-center opacity-70">
           System last updated: {new Date(__BUILD_TIME__).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
         </div>
       </div>
