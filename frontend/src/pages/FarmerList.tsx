@@ -87,7 +87,14 @@ export default function FarmerList() {
     setSearchParams(next);
   };
 
-  const activeFilters = Object.entries(filterParams).filter(([k]) => k !== "sort_by" && k !== "sort_dir");
+  const activeFilters = Object.entries(filterParams).filter(([k]) => k !== "sort_by" && k !== "sort_dir" && k !== "status");
+  const statusFilter = searchParams.get("status") || "all";
+  const setStatusFilter = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "all") next.delete("status");
+    else next.set("status", value);
+    setSearchParams(next);
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -101,6 +108,26 @@ export default function FarmerList() {
           <CloudUpload size={14} /> Saved on this device — it will sync automatically once you're back online.
         </div>
       )}
+
+      <div className="flex gap-2">
+        {[
+          { key: "all", label: "All" },
+          { key: "submitted", label: "Submitted" },
+          { key: "draft", label: "Drafts" },
+        ].map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => setStatusFilter(opt.key)}
+            className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+              statusFilter === opt.key
+                ? "gt-gradient text-white border-transparent shadow-sm"
+                : "bg-white text-[var(--gt-text-muted)] border-[var(--gt-border)]"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
 
       {activeFilters.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -159,22 +186,27 @@ export default function FarmerList() {
             {rows.map((r) => (
               <tr key={r.id} className="border-b border-[var(--gt-border)] hover:bg-[#F6F4F9] cursor-pointer" onClick={() => navigate(`/farmers/${r.id}`)}>
                 <td className="p-3">
-                  <div className="font-medium">{r.farmer_name}</div>
-                  <div className="text-xs text-[var(--gt-text-muted)]">{r.farmer_id} &middot; {r.mobile_no}</div>
+                  <div className="font-medium flex items-center gap-1.5">
+                    {r.farmer_name || <span className="text-[var(--gt-text-muted)]">Untitled draft</span>}
+                    {r.status === "draft" && (
+                      <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">DRAFT</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[var(--gt-text-muted)]">{r.farmer_id || "—"} &middot; {r.mobile_no || "—"}</div>
                 </td>
-                <td className="p-3">{trVillage(r.village, lang)} / {trTaluka(r.taluka, lang)}</td>
-                <td className="p-3">{trDistrict(r.district, lang)}</td>
-                <td className="p-3">{r.areca_area_acres} ac</td>
-                <td className="p-3">{r.yield_raw_qtl}</td>
+                <td className="p-3">{r.village ? <>{trVillage(r.village, lang)} / {trTaluka(r.taluka, lang)}</> : "—"}</td>
+                <td className="p-3">{r.district ? trDistrict(r.district, lang) : "—"}</td>
+                <td className="p-3">{r.areca_area_acres != null ? `${r.areca_area_acres} ac` : "—"}</td>
+                <td className="p-3">{r.yield_raw_qtl ?? "—"}</td>
                 <td className="p-3 font-semibold text-[var(--gt-purple-dark)]">
-                  {r.total_income_inr.toLocaleString("en-IN")}
+                  {r.total_income_inr != null ? r.total_income_inr.toLocaleString("en-IN") : "—"}
                 </td>
                 <td className="p-3">
                   <button
                     className="text-[var(--gt-purple)] text-xs font-semibold underline"
                     onClick={(e) => { e.stopPropagation(); navigate(`/entry/farmer?id=${r.id}`); }}
                   >
-                    {tr("edit", lang)}
+                    {r.status === "draft" ? "Continue" : tr("edit", lang)}
                   </button>
                 </td>
               </tr>

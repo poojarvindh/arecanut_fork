@@ -156,12 +156,28 @@ class FarmerSurvey(Base):
     __tablename__ = "farmer_survey"
     id = Column(Integer, primary_key=True)
 
+    # "draft" | "submitted" — Save as Draft. NULL is treated as "submitted"
+    # for backward compatibility: every row saved before this column existed
+    # necessarily went through the old all-or-nothing validation, so it's
+    # unambiguously a completed survey, not a draft. See db.py's
+    # sync_nullable_columns() for why the many NOT NULL columns below had to
+    # be relaxed for this to work on a column-by-column basis without a real
+    # migration tool.
+    status = Column(String, nullable=True, index=True)
+
     # Module 0: Farmer Master Link
-    farmer_id = Column(String, nullable=False, index=True)
-    farmer_name = Column(String, nullable=False)
-    mobile_no = Column(String, nullable=False)
-    gender = Column(String, nullable=False)
-    age = Column(Integer, nullable=False)
+    # All of these were previously nullable=False — a draft may not have
+    # them yet (e.g. the enumerator fetched a farmer but hasn't typed the
+    # rest), so every field a draft could plausibly leave blank is now
+    # nullable at the DB level too. The *strict* contract — every one of
+    # these actually required before a survey counts as submitted — still
+    # lives entirely in schemas.py::SurveyIn, completely unchanged; nothing
+    # here weakens what "Submit Survey" accepts.
+    farmer_id = Column(String, nullable=True, index=True)
+    farmer_name = Column(String, nullable=True)
+    mobile_no = Column(String, nullable=True)
+    gender = Column(String, nullable=True)
+    age = Column(Integer, nullable=True)
     guardian_name = Column(String, nullable=True)
 
     # CR-18: the agricultural year/season this survey reports on — distinct
@@ -173,22 +189,22 @@ class FarmerSurvey(Base):
     survey_year = Column(Integer, nullable=True, index=True)
 
     # Module 1: Society / FPC Linkage
-    society_assoc = Column(String, nullable=False)          # Yes/No
+    society_assoc = Column(String, nullable=True)          # Yes/No
     society_name = Column(String, nullable=True)
     society_since_year = Column(Integer, nullable=True)
     society_benefits = Column(String, nullable=True)        # comma-separated
     society_benefits_other = Column(String, nullable=True)
 
     # Module 2: Location Details
-    village = Column(String, nullable=False)
-    taluka = Column(String, nullable=False)
-    district = Column(String, nullable=False)
+    village = Column(String, nullable=True)
+    taluka = Column(String, nullable=True)
+    district = Column(String, nullable=True)
 
     # Module 3: Land Holding
-    land_own_acres = Column(Float, nullable=False)
+    land_own_acres = Column(Float, nullable=True)
     land_leased_acres = Column(Float, nullable=True, default=0)
-    areca_area_acres = Column(Float, nullable=False)
-    areca_plant_count = Column(Integer, nullable=False)
+    areca_area_acres = Column(Float, nullable=True)
+    areca_plant_count = Column(Integer, nullable=True)
     organic_farming = Column(String, nullable=True)          # Yes/No
     organic_certified = Column(String, nullable=True)        # Yes/No — if organic_farming == Yes
     organic_cert_applied = Column(String, nullable=True)     # Yes/No — if organic_certified == No
@@ -199,20 +215,20 @@ class FarmerSurvey(Base):
     intercrop_area_acres = Column(Float, nullable=True)
 
     # Module 4: Cultivation Cost & Yield
-    cultivation_cost_inr = Column(Float, nullable=False)
+    cultivation_cost_inr = Column(Float, nullable=True)
     yield_raw_qtl = Column(Float, nullable=True)  # required only when sale_type is "Sold raw areca"
     yield_processed_qtl = Column(Float, nullable=True)
 
     # Module 5: Sales, Marketing & Income
-    sale_type = Column(String, nullable=False)
+    sale_type = Column(String, nullable=True)
     processing_cost_inr = Column(Float, nullable=True)
     grading_done = Column(String, nullable=True)  # "Yes"/"No" — only asked when sale_type includes processed (CR-05)
     grading_rows = Column(Text, nullable=True)  # JSON array of {variety, variety_other, quantity_qtl, rate_inr_per_kg} (CR-05)
-    marketing_channel = Column(String, nullable=False)
+    marketing_channel = Column(String, nullable=True)
     marketing_channel_detail = Column(String, nullable=True)  # name, if Cooperative Society / APMC
     rate_inr_per_kg = Column(Float, nullable=True)  # not required when grading (CR-07) — required check moved to app validation
-    total_income_inr = Column(Float, nullable=False)        # auto-calculated
-    sale_month = Column(String, nullable=False)
+    total_income_inr = Column(Float, nullable=True)        # auto-calculated; null for an unsubmitted draft
+    sale_month = Column(String, nullable=True)
 
     # Module 6: Storage & Logistics
     storage_duration_months = Column(Float, nullable=True)
@@ -261,7 +277,7 @@ class FarmerSurvey(Base):
     overdraft_limit_inr_lakh = Column(Float, nullable=True)
 
     # Module 10: Credit & Finance
-    credit_linkage = Column(String, nullable=False)
+    credit_linkage = Column(String, nullable=True)
     credit_source = Column(String, nullable=True)
     credit_source_other = Column(String, nullable=True)
     credit_amount_inr = Column(Float, nullable=True)
@@ -274,7 +290,7 @@ class FarmerSurvey(Base):
     credit_gap_inr_lakh = Column(Float, nullable=True)
 
     # Module 11: Government Schemes
-    scheme_availed = Column(String, nullable=False)
+    scheme_availed = Column(String, nullable=True)
     scheme_name = Column(String, nullable=True)
     scheme_benefits = Column(Text, nullable=True)
 
@@ -283,13 +299,13 @@ class FarmerSurvey(Base):
     irrigation_challenges = Column(String, nullable=True)
 
     # Module 13: Soil Health & Crop Insurance
-    soil_test_done = Column(String, nullable=False)
-    crop_insurance = Column(String, nullable=False)
+    soil_test_done = Column(String, nullable=True)
+    crop_insurance = Column(String, nullable=True)
     crop_insurance_detail = Column(String, nullable=True)
     natural_calamity_5yr = Column(String, nullable=True)     # Yes/No — flood/drought in region, last 5 years
 
     # Module 14: Input Supply Chain
-    input_source = Column(String, nullable=False)
+    input_source = Column(String, nullable=True)
     input_source_other = Column(String, nullable=True)
     input_distance_km = Column(Float, nullable=True)
     input_challenges = Column(String, nullable=True)
@@ -297,7 +313,7 @@ class FarmerSurvey(Base):
     input_purchase_delay_days = Column(Integer, nullable=True)  # if "Availability" challenge selected
 
     # Module 15: Technology Adoption
-    tech_adoption = Column(String, nullable=False)
+    tech_adoption = Column(String, nullable=True)
     tech_adoption_detail = Column(String, nullable=True)
 
     # KCC
@@ -349,7 +365,7 @@ class FarmerPlot(Base):
     survey_id = Column(Integer, ForeignKey("farmer_survey.id"), nullable=False, index=True)
     sort_order = Column(Integer, nullable=False, default=0)
     label = Column(String, nullable=False, default="Plot 1")
-    reported_area_acres = Column(Float, nullable=False)
+    reported_area_acres = Column(Float, nullable=True)  # nullable for a draft plot still mid-entry
     boundary = Column(Text, nullable=True)       # JSON array of {lat, lng}, same shape as legacy plot_boundary
     area_acres = Column(Float, nullable=True)    # GPS-measured area for this plot, if a boundary was captured
     method = Column(String, nullable=True)        # "draw" | "excel" | "gps"
