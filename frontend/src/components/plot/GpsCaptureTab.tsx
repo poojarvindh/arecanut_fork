@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { Geolocation } from "@capacitor/geolocation";
 import { Capacitor } from "@capacitor/core";
-import { MapPin, Undo2, AlertCircle, Navigation, X, Play, Square, RotateCcw, MapPinned } from "lucide-react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { MapPin, Undo2, AlertCircle, Navigation, X, Play, Square, RotateCcw } from "lucide-react";
 import type { LatLngPoint, PlotBoundary } from "../../lib/plotBoundary";
 import { areaInAcres, haversineMeters, formatArea } from "../../lib/plotBoundary";
-import { loadGoogleMaps, isGoogleMapsConfigured } from "../../lib/googleMaps";
 import { t } from "../../i18n";
 import { useLang } from "../../LangContext";
 
 const TRACK_MAP_DEFAULT_CENTER = { lat: 13.9299, lng: 75.5681 }; // Shivamogga, Karnataka arecanut belt — same fallback as DrawMapTab
+
+const LIVE_MARKER_ICON = L.divIcon({
+  className: "",
+  html: `<div style="width:16px;height:16px;border-radius:9999px;background:#2563EB;border:2px solid white;box-shadow:0 0 2px rgba(0,0,0,0.4);"></div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
 
 interface Props {
   points: PlotBoundary;
@@ -75,13 +83,11 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   // the path walked so far, so they can see on-screen whether they're
   // actually tracing the real plot boundary rather than drifting off it) ---
   const [livePosition, setLivePosition] = useState<LatLngPoint | null>(null);
-  const [trackMapStatus, setTrackMapStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [trackMapError, setTrackMapError] = useState<string | null>(null);
   const trackMapDivRef = useRef<HTMLDivElement>(null);
-  const trackMapRef = useRef<google.maps.Map | null>(null);
-  const trackMarkerRef = useRef<google.maps.Marker | null>(null);
-  const trackPolylineRef = useRef<google.maps.Polyline | null>(null);
-  const trackPolygonRef = useRef<google.maps.Polygon | null>(null);
+  const trackMapRef = useRef<L.Map | null>(null);
+  const trackMarkerRef = useRef<L.Marker | null>(null);
+  const trackPolylineRef = useRef<L.Polyline | null>(null);
+  const trackPolygonRef = useRef<L.Polygon | null>(null);
 
   const isWeb = Capacitor.getPlatform() === "web";
 
@@ -184,45 +190,33 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   // ---------------- Walk the Perimeter live map ----------------
 
   // The map div unmounts whenever `mode` leaves "track" (conditional render
-  // below), so the Google Maps instance tied to that div must be torn down
-  // and recreated on the way back in — reusing a stale map/div pairing would
+  // below), so the Leaflet instance tied to that div must be torn down and
+  // recreated on the way back in — reusing a stale map/div pairing would
   // silently no-op every update.
   useEffect(() => {
     if (mode !== "track") {
-      trackPolylineRef.current?.setMap(null);
-      trackPolylineRef.current = null;
-      trackPolygonRef.current?.setMap(null);
-      trackPolygonRef.current = null;
-      trackMarkerRef.current?.setMap(null);
-      trackMarkerRef.current = null;
+      trackMapRef.current?.remove();
       trackMapRef.current = null;
-      setTrackMapStatus("idle");
+      trackMarkerRef.current = null;
+      trackPolylineRef.current = null;
+      trackPolygonRef.current = null;
       return;
     }
-    if (trackMapRef.current) return;
-    if (!isGoogleMapsConfigured()) {
-      setTrackMapStatus("error");
-      setTrackMapError("Google Maps API key is not configured yet — the live map will activate once it's added (VITE_GOOGLE_MAPS_API_KEY). GPS tracking itself still works without it.");
-      return;
-    }
-    setTrackMapStatus("loading");
-    loadGoogleMaps()
-      .then(() => {
-        if (!trackMapDivRef.current) return;
-        const map = new google.maps.Map(trackMapDivRef.current, {
-          center: trackPoints[0] || TRACK_MAP_DEFAULT_CENTER,
-          zoom: 18,
-          mapTypeId: "hybrid",
-          streetViewControl: false,
-          fullscreenControl: false,
-        });
-        trackMapRef.current = map;
-        setTrackMapStatus("ready");
-      })
-      .catch((e: Error) => {
-        setTrackMapStatus("error");
-        setTrackMapError(e.message);
-      });
+    if (trackMapRef.current || !trackMapDivRef.current) return;
+    const center = trackPoints[0] || TRACK_MAP_DEFAULT_CENTER;
+    const map = L.map(trackMapDivRef.current, { center: [center.lat, center.lng], zoom: 18 });
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    }).addTo(map);
+    // Esri's satellite tiles are pure imagery with no labels — this reference
+    // overlay adds place names/roads/boundaries on top, matching Google's old
+    // "hybrid" map type. Same approach as DrawMapTab.
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      pane: "overlayPane",
+    }).addTo(map);
+    trackMapRef.current = map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -232,24 +226,14 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   useEffect(() => {
     const map = trackMapRef.current;
     if (!livePosition || !map) return;
+    const latlng: L.LatLngTuple = [livePosition.lat, livePosition.lng];
     if (!trackMarkerRef.current) {
-      trackMarkerRef.current = new google.maps.Marker({
-        position: livePosition,
-        map,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 8,
-          fillColor: "#2563EB",
-          fillOpacity: 1,
-          strokeColor: "white",
-          strokeWeight: 2,
-        },
-        zIndex: 999,
-      });
+      trackMarkerRef.current = L.marker(latlng, { icon: LIVE_MARKER_ICON, zIndexOffset: 999 }).addTo(map);
     } else {
-      trackMarkerRef.current.setPosition(livePosition);
+      trackMarkerRef.current.setLatLng(latlng);
     }
-    map.panTo(livePosition);
+    map.panTo(latlng);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [livePosition]);
 
   // The walked path (only the kept/filtered points) redraws as a line, and
@@ -258,27 +242,16 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
   useEffect(() => {
     const map = trackMapRef.current;
     if (!map) return;
-    trackPolylineRef.current?.setMap(null);
-    trackPolygonRef.current?.setMap(null);
+    trackPolylineRef.current?.remove();
+    trackPolygonRef.current?.remove();
     trackPolylineRef.current = null;
     trackPolygonRef.current = null;
+    const latlngs = trackPoints.map((p) => [p.lat, p.lng] as [number, number]);
     if (trackPoints.length >= 2) {
-      trackPolylineRef.current = new google.maps.Polyline({
-        path: trackPoints,
-        map,
-        strokeColor: "#A6266E",
-        strokeWeight: 3,
-      });
+      trackPolylineRef.current = L.polyline(latlngs, { color: "#A6266E", weight: 3 }).addTo(map);
     }
     if (trackPoints.length >= 3) {
-      trackPolygonRef.current = new google.maps.Polygon({
-        paths: trackPoints,
-        map,
-        strokeColor: "#A6266E",
-        strokeWeight: 2,
-        fillColor: "#5A2D82",
-        fillOpacity: 0.25,
-      });
+      trackPolygonRef.current = L.polygon(latlngs, { color: "#A6266E", weight: 2, fillColor: "#5A2D82", fillOpacity: 0.25 }).addTo(map);
     }
   }, [trackPoints]);
 
@@ -332,7 +305,7 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
     }
     setTracking(false);
     setLivePosition(null);
-    trackMarkerRef.current?.setMap(null);
+    trackMarkerRef.current?.remove();
     trackMarkerRef.current = null;
   };
 
@@ -450,28 +423,17 @@ export default function GpsCaptureTab({ points, onChange }: Props) {
             {t("Stand at one corner, tap \"Start Walking\", then walk the full boundary of the plot once, in order, back to where you started. The system logs your position automatically as you go — no tapping needed per corner. Tap \"Finish\" once you've walked the whole perimeter.", lang)}
           </div>
 
-          {trackMapStatus === "error" ? (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-3">
-              <AlertCircle size={18} className="shrink-0" /> {trackMapError}
-            </div>
-          ) : (
-            <div className="relative w-full rounded-xl border border-[var(--gt-border)] bg-[#F1EBF7]" style={{ height: 280 }}>
-              {/* Same DOM-ownership caveat as DrawMapTab: Google Maps takes over this
-                  div directly once loaded, so it must stay free of React-rendered
-                  children — the loading indicator is an absolutely-positioned sibling. */}
-              <div ref={trackMapDivRef} className="w-full h-full rounded-xl" />
-              {trackMapStatus === "loading" && (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-[var(--gt-text-muted)] pointer-events-none">
-                  <MapPinned size={18} className="animate-pulse mr-2" /> {t("Loading map…", lang)}
-                </div>
-              )}
-              {trackMapStatus === "ready" && !tracking && trackPoints.length === 0 && (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-[var(--gt-text-muted)] bg-white/60 pointer-events-none px-4 text-center">
-                  {t("Tap \"Start Walking\" to see your live position and walked path here.", lang)}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="relative w-full rounded-xl border border-[var(--gt-border)] bg-[#F1EBF7]" style={{ height: 280 }}>
+            {/* Same DOM-ownership caveat as DrawMapTab: Leaflet takes over this
+                div directly once created, so it must stay free of React-rendered
+                children — the placeholder below is an absolutely-positioned sibling. */}
+            <div ref={trackMapDivRef} className="w-full h-full rounded-xl" />
+            {!tracking && trackPoints.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-[var(--gt-text-muted)] bg-white/60 pointer-events-none px-4 text-center">
+                {t("Tap \"Start Walking\" to see your live position and walked path here.", lang)}
+              </div>
+            )}
+          </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-sm text-[var(--gt-text)] whitespace-nowrap">{t("Capture a point every", lang)}</label>

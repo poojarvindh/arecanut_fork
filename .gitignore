@@ -16,6 +16,9 @@ frontend/android/.gradle/
 frontend/android/local.properties
 frontend/android/keystore.properties
 keystore/
+*.keystore
+*.keystore.txt
+*.jks
 
 .vercel
 *.apk
