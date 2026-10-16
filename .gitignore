@@ -7,6 +7,7 @@ dev-dist/
 .env.*.local
 __pycache__/
 *.pyc
+backend/venv/
 backend/arecanut.db
 backend/uvicorn.log
 frontend/vite.log
@@ -15,6 +16,9 @@ frontend/android/.gradle/
 frontend/android/local.properties
 frontend/android/keystore.properties
 keystore/
+*.keystore
+*.keystore.txt
+*.jks
 
 .vercel
 *.apk
